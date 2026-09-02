@@ -1,0 +1,24 @@
+-- GAL CRM V1 — fix: grant service_role access to meta_campaign_daily_metrics
+--
+-- Root cause (same pattern already documented and fixed for `authenticated`
+-- in 20260902111440_gal_crm_v1_authenticated_table_grants.sql): this
+-- project has automatic-RLS-with-default-grants disabled at creation
+-- time, so a newly created table gets NO default privileges for ANY
+-- role — not even `service_role`. `service_role`'s BYPASSRLS attribute
+-- only skips row-level security policies; it does not skip the base
+-- object-level GRANT check Postgres performs first. Running the Meta
+-- sync script (scripts/meta-sync.mjs, using service_role as designed —
+-- see the table's own migration comment) against
+-- meta_campaign_daily_metrics failed with 42501 "permission denied for
+-- table meta_campaign_daily_metrics" before RLS was ever reached.
+-- Confirmed live during the first real sync run.
+--
+-- Fix: grant exactly the privileges the sync script needs and no more —
+-- SELECT (to read back the upsert result), INSERT and UPDATE (for the
+-- upsert itself). No DELETE: the sync never deletes rows.
+--
+-- `authenticated` already has SELECT-only (from the table's own
+-- migration) and remains untouched here — this migration only touches
+-- `service_role`.
+
+grant select, insert, update on public.meta_campaign_daily_metrics to service_role;

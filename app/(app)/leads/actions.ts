@@ -109,3 +109,100 @@ export async function createLead(
 
   return { error: null, success: true };
 }
+
+// ============================================================
+// Stage changes
+// ============================================================
+
+export type ChangeStageResult = { error: string | null };
+
+// Moves a lead to any stage except WON (the DB function itself rejects
+// WON — see supabase/migrations/..._lead_workflow_functions.sql). The
+// function is atomic (stage update + lead_stage_events insert in one
+// transaction) and no-ops cleanly when the stage is unchanged, so this
+// is safe to call even if the UI ends up invoking it redundantly.
+export async function changeLeadStage(
+  leadId: string,
+  newStage: string,
+  lostReason?: string | null
+): Promise<ChangeStageResult> {
+  const supabase = await createClient();
+
+  const { error } = await supabase.rpc("change_lead_stage", {
+    p_lead_id: leadId,
+    p_new_stage: newStage,
+    p_lost_reason: lostReason ?? null,
+  });
+
+  if (error) {
+    return { error: `לא הצלחנו לעדכן את השלב: ${error.message}` };
+  }
+
+  revalidatePath("/leads");
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/dashboard");
+
+  return { error: null };
+}
+
+// ============================================================
+// WON conversion
+// ============================================================
+
+export type ConvertToWonState = {
+  error: string | null;
+  success?: boolean;
+};
+
+export async function convertLeadToWon(
+  _prevState: ConvertToWonState,
+  formData: FormData
+): Promise<ConvertToWonState> {
+  const leadId = optionalString(formData.get("lead_id"));
+  const serviceType = optionalString(formData.get("service_type"));
+  const customServiceName = optionalString(formData.get("custom_service_name"));
+  const priceRaw = optionalString(formData.get("agreed_price"));
+  const recurrence = optionalString(formData.get("recurrence")) ?? "ONE_TIME";
+  const startDate = optionalString(formData.get("start_date"));
+  const notes = optionalString(formData.get("notes"));
+
+  if (!leadId) return { error: "שגיאה פנימית: הליד לא זוהה." };
+  if (!serviceType) return { error: "יש לבחור שירות." };
+  if (serviceType === "OTHER" && !customServiceName) {
+    return { error: 'כשבוחרים "אחר" יש לפרט את שם השירות.' };
+  }
+  if (!priceRaw) return { error: "יש להזין מחיר מוסכם." };
+
+  const priceNis = Number(priceRaw.replace(/,/g, ""));
+  if (!Number.isFinite(priceNis) || priceNis < 0) {
+    return { error: "המחיר שהוזן אינו תקין." };
+  }
+  // ₪ -> integer agorot. Never store money as a float.
+  const agreedPriceAmount = Math.round(priceNis * 100);
+
+  if (!startDate) return { error: "יש לבחור תאריך התחלה." };
+
+  const supabase = await createClient();
+
+  const { error } = await supabase.rpc("convert_lead_to_won", {
+    p_lead_id: leadId,
+    p_service_type: serviceType,
+    p_custom_service_name: serviceType === "OTHER" ? customServiceName : null,
+    p_agreed_price_amount: agreedPriceAmount,
+    p_recurrence: recurrence,
+    p_start_date: startDate,
+    p_notes: notes,
+  });
+
+  if (error) {
+    return { error: `לא הצלחנו לסגור את הליד: ${error.message}` };
+  }
+
+  revalidatePath("/leads");
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/customers");
+  revalidatePath("/payments");
+
+  return { error: null, success: true };
+}

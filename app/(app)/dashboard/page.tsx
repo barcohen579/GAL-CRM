@@ -43,8 +43,20 @@ type UpcomingFollowUp = {
   id: string;
   title: string;
   due_at: string;
-  lead: { contact: { full_name: string } | null } | null;
-  customer: { contact: { full_name: string } | null } | null;
+  lead: { id: string; contact: { full_name: string } | null } | null;
+  customer: { id: string; contact: { full_name: string } | null } | null;
+};
+
+type RecentPayment = {
+  id: string;
+  amount: number;
+  currency: string;
+  paid_at: string;
+  purchase: {
+    service_type: ServiceType;
+    custom_service_name: string | null;
+    customer: { id: string; contact: { full_name: string } | null } | null;
+  } | null;
 };
 
 export default async function DashboardPage() {
@@ -62,6 +74,7 @@ export default async function DashboardPage() {
     lostAllTimeRes,
     recentLeadsRes,
     upcomingFollowUpsRes,
+    recentPaymentsRes,
   ] = await Promise.all([
     supabase
       .from("leads")
@@ -104,10 +117,18 @@ export default async function DashboardPage() {
     supabase
       .from("follow_up_tasks")
       .select(
-        "id, title, due_at, lead:leads(contact:contacts(full_name)), customer:customers(contact:contacts(full_name))"
+        "id, title, due_at, lead:leads(id, contact:contacts(full_name)), customer:customers(id, contact:contacts(full_name))"
       )
       .eq("status", "PENDING")
       .order("due_at", { ascending: true })
+      .limit(5),
+    supabase
+      .from("payments")
+      .select(
+        "id, amount, currency, paid_at, purchase:purchases(service_type, custom_service_name, customer:customers(id, contact:contacts(full_name)))"
+      )
+      .eq("status", "PAID")
+      .order("paid_at", { ascending: false })
       .limit(5),
   ]);
 
@@ -125,6 +146,8 @@ export default async function DashboardPage() {
   const recentLeads = (recentLeadsRes.data ?? []) as unknown as RecentLead[];
   const upcomingFollowUps = (upcomingFollowUpsRes.data ??
     []) as unknown as UpcomingFollowUp[];
+  const recentPayments = (recentPaymentsRes.data ??
+    []) as unknown as RecentPayment[];
 
   return (
     <div>
@@ -172,7 +195,7 @@ export default async function DashboardPage() {
         />
       </div>
 
-      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card>
           <CardHeader
             title="לידים אחרונים"
@@ -196,24 +219,26 @@ export default async function DashboardPage() {
           ) : (
             <ul className="divide-y divide-zinc-100">
               {recentLeads.map((lead) => (
-                <li
-                  key={lead.id}
-                  className="flex items-center justify-between gap-3 px-5 py-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-zinc-900">
-                      {lead.contact?.full_name ?? "איש קשר לא ידוע"}
-                    </p>
-                    <p className="truncate text-xs text-zinc-500">
-                      {lead.interested_service
-                        ? SERVICE_TYPE_LABELS[lead.interested_service]
-                        : "לא צוין שירות"}{" "}
-                      · {formatDate(lead.created_at)}
-                    </p>
-                  </div>
-                  <Badge tone={LEAD_STAGE_TONE[lead.stage]}>
-                    {LEAD_STAGE_LABELS[lead.stage]}
-                  </Badge>
+                <li key={lead.id}>
+                  <Link
+                    href={`/leads/${lead.id}`}
+                    className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-zinc-50"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-zinc-900">
+                        {lead.contact?.full_name ?? "איש קשר לא ידוע"}
+                      </p>
+                      <p className="truncate text-xs text-zinc-500">
+                        {lead.interested_service
+                          ? SERVICE_TYPE_LABELS[lead.interested_service]
+                          : "לא צוין שירות"}{" "}
+                        · {formatDate(lead.created_at)}
+                      </p>
+                    </div>
+                    <Badge tone={LEAD_STAGE_TONE[lead.stage]}>
+                      {LEAD_STAGE_LABELS[lead.stage]}
+                    </Badge>
+                  </Link>
                 </li>
               ))}
             </ul>
@@ -248,11 +273,13 @@ export default async function DashboardPage() {
                   task.lead?.contact?.full_name ??
                   task.customer?.contact?.full_name ??
                   "לא ידוע";
-                return (
-                  <li
-                    key={task.id}
-                    className="flex items-center justify-between gap-3 px-5 py-3"
-                  >
+                const href = task.lead
+                  ? `/leads/${task.lead.id}`
+                  : task.customer
+                    ? `/customers/${task.customer.id}`
+                    : undefined;
+                const row = (
+                  <>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-zinc-900">
                         {task.title}
@@ -266,6 +293,87 @@ export default async function DashboardPage() {
                     >
                       {formatRelative(task.due_at)}
                     </span>
+                  </>
+                );
+                return (
+                  <li key={task.id}>
+                    {href ? (
+                      <Link
+                        href={href}
+                        className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-zinc-50"
+                      >
+                        {row}
+                      </Link>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3 px-5 py-3">
+                        {row}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="תשלומים אחרונים"
+            action={
+              <Link
+                href="/payments"
+                className="flex items-center gap-1 text-xs font-medium text-rose-600 hover:text-rose-700"
+              >
+                לכל התשלומים <ArrowLeft className="h-3.5 w-3.5" />
+              </Link>
+            }
+          />
+          {recentPayments.length === 0 ? (
+            <div className="p-5">
+              <EmptyState
+                icon={Wallet}
+                title="עדיין אין תשלומים"
+                description="תשלומים שיירשמו יופיעו כאן, מהאחרון ביותר."
+              />
+            </div>
+          ) : (
+            <ul className="divide-y divide-zinc-100">
+              {recentPayments.map((payment) => {
+                const serviceLabel =
+                  payment.purchase?.custom_service_name ??
+                  (payment.purchase
+                    ? SERVICE_TYPE_LABELS[payment.purchase.service_type]
+                    : "שירות לא ידוע");
+                const customer = payment.purchase?.customer;
+                const row = (
+                  <>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-zinc-900">
+                        {customer?.contact?.full_name ?? "לקוחה לא ידועה"}
+                      </p>
+                      <p className="truncate text-xs text-zinc-500">
+                        {serviceLabel} · {formatDate(payment.paid_at)}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-sm font-semibold text-zinc-900">
+                      {formatMoney(payment.amount, payment.currency)}
+                    </span>
+                  </>
+                );
+                return (
+                  <li key={payment.id}>
+                    {customer ? (
+                      <Link
+                        href={`/customers/${customer.id}`}
+                        className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-zinc-50"
+                      >
+                        {row}
+                      </Link>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3 px-5 py-3">
+                        {row}
+                      </div>
+                    )}
                   </li>
                 );
               })}

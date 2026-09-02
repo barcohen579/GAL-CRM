@@ -17,7 +17,7 @@ export default async function FollowUpsPage() {
     supabase
       .from("follow_up_tasks")
       .select(
-        `id, title, notes, due_at, status, completed_at, source,
+        `id, title, notes, due_at, status, completed_at, completed_note, source,
          lead:leads(id, stage, contact:contacts(id, full_name)),
          customer:customers(id, contact:contacts(id, full_name))`
       )
@@ -26,7 +26,7 @@ export default async function FollowUpsPage() {
     supabase
       .from("follow_up_tasks")
       .select(
-        `id, title, notes, due_at, status, completed_at, source,
+        `id, title, notes, due_at, status, completed_at, completed_note, source,
          lead:leads(id, stage, contact:contacts(id, full_name)),
          customer:customers(id, contact:contacts(id, full_name))`
       )

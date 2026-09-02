@@ -54,6 +54,26 @@ export const LEAD_STAGE_TONE: Record<LeadStage, Tone> = {
   LOST: "danger",
 };
 
+export const LEAD_LOST_REASONS = [
+  "PRICE",
+  "TIMING",
+  "NO_RESPONSE",
+  "CHOSE_COMPETITOR",
+  "NOT_INTERESTED",
+  "OTHER",
+] as const;
+
+export type LeadLostReason = (typeof LEAD_LOST_REASONS)[number];
+
+export const LEAD_LOST_REASON_LABELS: Record<LeadLostReason, string> = {
+  PRICE: "המחיר לא התאים",
+  TIMING: "לא הזמן המתאים",
+  NO_RESPONSE: "לא הגיבה יותר",
+  CHOSE_COMPETITOR: "בחרה מקום אחר",
+  NOT_INTERESTED: "לא הייתה מעוניינת",
+  OTHER: "אחר",
+};
+
 export const SERVICE_TYPES = [
   "GROUP_TRAINING",
   "PERSONAL_TRAINING",
@@ -120,12 +140,27 @@ export const PAYMENT_STATUS_TONE: Record<string, Tone> = {
   FAILED: "danger",
 };
 
+export const PAYMENT_METHODS = [
+  "CASH",
+  "CARD",
+  "BIT",
+  "BANK_TRANSFER",
+  "OTHER",
+] as const;
+
 export const PAYMENT_METHOD_LABELS: Record<string, string> = {
   CASH: "מזומן",
   CARD: "כרטיס אשראי",
   BIT: "ביט",
   BANK_TRANSFER: "העברה בנקאית",
   OTHER: "אחר",
+};
+
+export const PAYMENT_STATUSES = ["PAID", "REFUNDED", "FAILED"] as const;
+
+export const RECURRENCE_LABELS: Record<string, string> = {
+  ONE_TIME: "חד פעמי",
+  RECURRING_MONTHLY: "חודשי (מתחדש)",
 };
 
 export const PURCHASE_STATUS_TONE: Record<string, Tone> = {

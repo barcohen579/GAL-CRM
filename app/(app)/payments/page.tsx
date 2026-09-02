@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Wallet } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/ui/page-header";
@@ -11,7 +12,7 @@ import {
   PAYMENT_STATUS_TONE,
   PAYMENT_METHOD_LABELS,
 } from "@/lib/crm/constants";
-import { formatDate, formatMoney } from "@/lib/crm/format";
+import { formatDate, formatMoney, startOfMonthISO } from "@/lib/crm/format";
 import type { PaymentWithRelations } from "@/lib/crm/types";
 
 export const metadata: Metadata = { title: "תשלומים — GAL CRM" };
@@ -24,7 +25,7 @@ export default async function PaymentsPage() {
     .from("payments")
     .select(
       `id, amount, currency, paid_at, method, status,
-       purchase:purchases(service_type, custom_service_name, customer:customers(contact:contacts(full_name)))`
+       purchase:purchases(id, service_type, custom_service_name, customer:customers(id, contact:contacts(full_name)))`
     )
     .order("paid_at", { ascending: false });
 
@@ -35,6 +36,11 @@ export default async function PaymentsPage() {
     .reduce((sum, p) => sum + p.amount, 0);
   const totalRefunded = payments
     .filter((p) => p.status === "REFUNDED")
+    .reduce((sum, p) => sum + p.amount, 0);
+
+  const monthStart = startOfMonthISO().slice(0, 10);
+  const totalThisMonth = payments
+    .filter((p) => p.status === "PAID" && p.paid_at >= monthStart)
     .reduce((sum, p) => sum + p.amount, 0);
 
   return (
@@ -50,18 +56,15 @@ export default async function PaymentsPage() {
         </p>
       )}
 
-      <div className="mb-6 grid grid-cols-2 gap-4 sm:max-w-md">
+      <div className="mb-6 grid grid-cols-3 gap-4 sm:max-w-xl">
         <StatCard
-          label="סה״כ נגבה"
-          value={formatMoney(totalPaid)}
+          label="התקבל החודש"
+          value={formatMoney(totalThisMonth)}
           icon={Wallet}
           tone="accent"
         />
-        <StatCard
-          label="סה״כ זוכה"
-          value={formatMoney(totalRefunded)}
-          icon={Wallet}
-        />
+        <StatCard label="סה״כ נגבה" value={formatMoney(totalPaid)} icon={Wallet} />
+        <StatCard label="סה״כ זוכה" value={formatMoney(totalRefunded)} icon={Wallet} />
       </div>
 
       {payments.length === 0 ? (
@@ -86,7 +89,16 @@ export default async function PaymentsPage() {
                         : "שירות לא ידוע")}
                   </p>
                   <p className="truncate text-xs text-zinc-500">
-                    {payment.purchase?.customer?.contact?.full_name ?? "לקוחה לא ידועה"}
+                    {payment.purchase?.customer ? (
+                      <Link
+                        href={`/customers/${payment.purchase.customer.id}`}
+                        className="hover:text-rose-600 hover:underline"
+                      >
+                        {payment.purchase.customer.contact?.full_name ?? "לקוחה לא ידועה"}
+                      </Link>
+                    ) : (
+                      "לקוחה לא ידועה"
+                    )}
                     {" · "}
                     {formatDate(payment.paid_at)}
                     {" · "}

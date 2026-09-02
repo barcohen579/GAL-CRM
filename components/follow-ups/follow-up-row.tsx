@@ -2,6 +2,7 @@ import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
 import type { FollowUpWithRelations } from "@/lib/crm/types";
 import { formatDateTime, formatRelative } from "@/lib/crm/format";
+import { FollowUpTaskActions } from "./follow-up-task-actions";
 
 export function FollowUpRow({
   task,
@@ -12,7 +13,11 @@ export function FollowUpRow({
 }) {
   const name =
     task.lead?.contact?.full_name ?? task.customer?.contact?.full_name ?? "לא ידוע";
-  const href = task.lead ? "/leads" : "/customers";
+  const href = task.lead
+    ? `/leads/${task.lead.id}`
+    : task.customer
+      ? `/customers/${task.customer.id}`
+      : undefined;
 
   return (
     <div
@@ -39,18 +44,27 @@ export function FollowUpRow({
             {task.title}
           </p>
         </div>
-        <Link
-          href={href}
-          className="mt-0.5 block truncate text-xs text-zinc-500 hover:text-rose-600 hover:underline"
-        >
-          {name}
-        </Link>
+        {href ? (
+          <Link
+            href={href}
+            className="mt-0.5 block truncate text-xs text-zinc-500 hover:text-rose-600 hover:underline"
+          >
+            {name}
+          </Link>
+        ) : (
+          <p className="mt-0.5 truncate text-xs text-zinc-500">{name}</p>
+        )}
         {task.notes && (
           <p className="mt-1 truncate text-xs text-zinc-400">{task.notes}</p>
         )}
+        {tone === "done" && task.completed_note && (
+          <p className="mt-1 truncate text-xs text-emerald-700">
+            {task.completed_note}
+          </p>
+        )}
       </div>
 
-      <div className="shrink-0 text-end">
+      <div className="flex shrink-0 flex-col items-end gap-1.5">
         <p
           className={`text-xs font-semibold ${
             tone === "overdue"
@@ -62,6 +76,13 @@ export function FollowUpRow({
         >
           {tone === "done" ? formatDateTime(task.due_at) : formatRelative(task.due_at)}
         </p>
+        {tone !== "done" && (
+          <FollowUpTaskActions
+            taskId={task.id}
+            leadId={task.lead?.id}
+            customerId={task.customer?.id}
+          />
+        )}
       </div>
     </div>
   );

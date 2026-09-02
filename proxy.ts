@@ -1,0 +1,17 @@
+import { type NextRequest } from "next/server";
+import { updateSession } from "@/lib/supabase/middleware";
+
+// Next.js 16 renamed the `middleware.ts` file convention to `proxy.ts`
+// (see: npx @next/codemod@canary middleware-to-proxy). Behavior is
+// unchanged from classic Middleware — this just avoids the deprecated
+// file/function name.
+export async function proxy(request: NextRequest) {
+  return updateSession(request);
+}
+
+export const config = {
+  matcher: [
+    // Run on every request except static assets and Next.js internals.
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
+};

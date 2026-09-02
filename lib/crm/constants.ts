@@ -128,6 +128,16 @@ export const TOUCHPOINT_CHANNEL_LABELS: Record<TouchpointChannel, string> = {
   UNKNOWN: "לא ידוע",
 };
 
+export const ATTRIBUTION_CERTAINTIES = ["CONFIRMED", "BROAD", "UNKNOWN"] as const;
+
+export type AttributionCertainty = (typeof ATTRIBUTION_CERTAINTIES)[number];
+
+export const ATTRIBUTION_CERTAINTY_LABELS: Record<AttributionCertainty, string> = {
+  CONFIRMED: "מאומת",
+  BROAD: "רחב",
+  UNKNOWN: "לא ידוע",
+};
+
 export const PAYMENT_STATUS_LABELS: Record<string, string> = {
   PAID: "שולם",
   REFUNDED: "זוכה",

@@ -16,6 +16,10 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import {
+  MarketingPerformance,
+  type MarketingPerformanceData,
+} from "@/components/dashboard/marketing-performance";
+import {
   LEAD_STAGE_LABELS,
   LEAD_STAGE_TONE,
   SERVICE_TYPE_LABELS,
@@ -26,6 +30,14 @@ import {
   formatRelative,
   startOfMonthISO,
 } from "@/lib/crm/format";
+import { resolveMarketingRange } from "@/lib/crm/date-range";
+import {
+  aggregateCampaignTotals,
+  classifyLeadAttribution,
+  safeDivide,
+  type MetaDailyRow,
+  type LeadTouchpointForAttribution,
+} from "@/lib/crm/marketing";
 import type { LeadStage, ServiceType } from "@/lib/crm/constants";
 
 export const metadata: Metadata = { title: "לוח בקרה — GAL CRM" };
@@ -59,7 +71,14 @@ type RecentPayment = {
   } | null;
 };
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ range?: string }>;
+}) {
+  const { range: rangeParam } = await searchParams;
+  const range = resolveMarketingRange(rangeParam);
+
   const supabase = await createClient();
   const monthStart = startOfMonthISO();
   const nowIso = new Date().toISOString();
@@ -75,6 +94,11 @@ export default async function DashboardPage() {
     recentLeadsRes,
     upcomingFollowUpsRes,
     recentPaymentsRes,
+    metaMetricsRes,
+    leadsInRangeWithTouchpointsRes,
+    wonEventsInRangeRes,
+    revenuePaymentsInRangeRes,
+    confirmedMetaTouchpointsRes,
   ] = await Promise.all([
     supabase
       .from("leads")
@@ -130,7 +154,132 @@ export default async function DashboardPage() {
       .eq("status", "PAID")
       .order("paid_at", { ascending: false })
       .limit(5),
+
+    // ---- Marketing section (Phase 2), all scoped to the selected range ----
+    supabase
+      .from("meta_campaign_daily_metrics")
+      .select("meta_ad_account_id, campaign_id, campaign_name, metric_date, spend_minor, impressions, reach, clicks")
+      .gte("metric_date", range.sinceDate)
+      .lte("metric_date", range.untilDate),
+    supabase
+      .from("leads")
+      .select("id, touchpoints(channel, certainty)")
+      .gte("created_at", range.sinceTimestamp)
+      .lt("created_at", range.untilTimestampExclusive),
+    supabase
+      .from("lead_stage_events")
+      .select("id, lead_id")
+      .eq("to_stage", "WON")
+      .gte("changed_at", range.sinceTimestamp)
+      .lt("changed_at", range.untilTimestampExclusive),
+    supabase
+      .from("payments")
+      .select("amount, purchase_id")
+      .eq("status", "PAID")
+      .gte("paid_at", range.sinceDate)
+      .lte("paid_at", range.untilDate),
+    // Global (not range-scoped): whether ANY confirmed-Meta lead exists
+    // at all — a lead's confirmed attribution is a fixed property, not
+    // itself date-ranged; only the resulting revenue is range-filtered.
+    supabase
+      .from("touchpoints")
+      .select("lead_id")
+      .eq("channel", "META_AD")
+      .eq("certainty", "CONFIRMED"),
   ]);
+
+  // Meta spend + campaign table for the selected range.
+  const metaRows = (metaMetricsRes.data ?? []) as unknown as MetaDailyRow[];
+  const metaSpendMinor = metaRows.reduce((s, r) => s + r.spend_minor, 0);
+  const metaAccountIds = [...new Set(metaRows.map((r) => r.meta_ad_account_id))];
+  const campaigns = aggregateCampaignTotals(metaRows);
+
+  // New leads + Meta attribution classification for the selected range.
+  const leadsInRange = (leadsInRangeWithTouchpointsRes.data ?? []) as unknown as {
+    id: string;
+    touchpoints: LeadTouchpointForAttribution[];
+  }[];
+  const newLeadsCount = leadsInRange.length;
+  let confirmedMetaLeadsCount = 0;
+  let broadMetaLeadsCount = 0;
+  for (const lead of leadsInRange) {
+    const classification = classifyLeadAttribution(lead.touchpoints ?? []);
+    if (classification === "CONFIRMED_META") confirmedMetaLeadsCount += 1;
+    else if (classification === "BROAD_META") broadMetaLeadsCount += 1;
+  }
+  const metaAttributedLeadsCount = confirmedMetaLeadsCount + broadMetaLeadsCount;
+
+  const metaSpendNis = metaSpendMinor / 100;
+  const primaryCplNis = safeDivide(metaSpendNis, confirmedMetaLeadsCount);
+  const primaryCplMinor = primaryCplNis === null ? null : Math.round(primaryCplNis * 100);
+  const secondaryCplNis = safeDivide(metaSpendNis, metaAttributedLeadsCount);
+  const secondaryCplMinor = secondaryCplNis === null ? null : Math.round(secondaryCplNis * 100);
+
+  // WON transitions in range (via stage history, not current stage).
+  const wonInRangeCount = new Set(
+    (wonEventsInRangeRes.data ?? []).map((e) => e.lead_id)
+  ).size;
+
+  // Actual revenue in range (real payments only — never list price).
+  const revenueMinor = (revenuePaymentsInRangeRes.data ?? []).reduce(
+    (s, p) => s + p.amount,
+    0
+  );
+  const revenueToSpendRatio = safeDivide(revenueMinor, metaSpendMinor);
+
+  // Confirmed-Meta-attributed revenue: trace CONFIRMED META_AD leads ->
+  // their purchases (purchases.lead_id, set once at WON conversion) ->
+  // PAID payments on those purchases within the range. Schema supports
+  // this unambiguously (one lead_id per purchase); if no confirmed-Meta
+  // leads exist at all, the UI shows "not yet reliably measurable"
+  // rather than a fabricated 0/0 ratio.
+  const confirmedMetaLeadIds = [
+    ...new Set((confirmedMetaTouchpointsRes.data ?? []).map((t) => t.lead_id)),
+  ];
+  const confirmedMetaLeadsExistOverall = confirmedMetaLeadIds.length > 0;
+  let confirmedMetaRevenueMinor = 0;
+  if (confirmedMetaLeadsExistOverall) {
+    const { data: purchasesForConfirmedLeads } = await supabase
+      .from("purchases")
+      .select("id")
+      .in("lead_id", confirmedMetaLeadIds);
+    const purchaseIds = (purchasesForConfirmedLeads ?? []).map((p) => p.id);
+    if (purchaseIds.length > 0) {
+      const { data: confirmedPayments } = await supabase
+        .from("payments")
+        .select("amount")
+        .eq("status", "PAID")
+        .gte("paid_at", range.sinceDate)
+        .lte("paid_at", range.untilDate)
+        .in("purchase_id", purchaseIds);
+      confirmedMetaRevenueMinor = (confirmedPayments ?? []).reduce(
+        (s, p) => s + p.amount,
+        0
+      );
+    }
+  }
+  const confirmedMetaRoas = confirmedMetaLeadsExistOverall
+    ? safeDivide(confirmedMetaRevenueMinor, metaSpendMinor)
+    : null;
+
+  const marketingData: MarketingPerformanceData = {
+    range,
+    metaSpendMinor,
+    metaAccountIds,
+    newLeadsCount,
+    metaAttributedLeadsCount,
+    confirmedMetaLeadsCount,
+    broadMetaLeadsCount,
+    primaryCplMinor,
+    secondaryCplMinor,
+    wonCount: wonInRangeCount,
+    revenueMinor,
+    revenueToSpendRatio,
+    confirmedMetaLeadsExistOverall,
+    confirmedMetaRevenueMinor,
+    confirmedMetaRoas,
+    campaigns,
+  };
 
   const revenueThisMonth = (paymentsThisMonthRes.data ?? []).reduce(
     (sum, p) => sum + p.amount,
@@ -380,6 +529,10 @@ export default async function DashboardPage() {
             </ul>
           )}
         </Card>
+      </div>
+
+      <div id="marketing">
+        <MarketingPerformance data={marketingData} />
       </div>
     </div>
   );

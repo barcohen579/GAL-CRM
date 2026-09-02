@@ -19,6 +19,7 @@ import {
   MarketingPerformance,
   type MarketingPerformanceData,
 } from "@/components/dashboard/marketing-performance";
+import { MonthlyPerformance } from "@/components/dashboard/monthly-performance";
 import {
   LEAD_STAGE_LABELS,
   LEAD_STAGE_TONE,
@@ -30,11 +31,18 @@ import {
   formatRelative,
   startOfMonthISO,
 } from "@/lib/crm/format";
-import { resolveMarketingRange } from "@/lib/crm/date-range";
+import {
+  resolveMarketingRange,
+  currentMonthKey,
+  monthKeyOf,
+  previousMonthKeyOf,
+  formatMonthLabel,
+} from "@/lib/crm/date-range";
 import {
   aggregateCampaignTotals,
   classifyLeadAttribution,
   safeDivide,
+  buildMonthlyMetrics,
   type MetaDailyRow,
   type LeadTouchpointForAttribution,
 } from "@/lib/crm/marketing";
@@ -99,6 +107,10 @@ export default async function DashboardPage({
     wonEventsInRangeRes,
     revenuePaymentsInRangeRes,
     confirmedMetaTouchpointsRes,
+    allMetaRowsRes,
+    allLeadsWithTouchpointsRes,
+    allWonEventsRes,
+    allPaidPaymentsRes,
   ] = await Promise.all([
     supabase
       .from("leads")
@@ -186,6 +198,16 @@ export default async function DashboardPage({
       .select("lead_id")
       .eq("channel", "META_AD")
       .eq("certainty", "CONFIRMED"),
+
+    // ---- Monthly performance section — deliberately ALL-TIME (not
+    // range-scoped), so history isn't artificially cut at the current
+    // range selection. ----
+    supabase
+      .from("meta_campaign_daily_metrics")
+      .select("meta_ad_account_id, campaign_id, campaign_name, metric_date, spend_minor, impressions, reach, clicks"),
+    supabase.from("leads").select("id, created_at, touchpoints(channel, certainty)"),
+    supabase.from("lead_stage_events").select("lead_id, changed_at").eq("to_stage", "WON"),
+    supabase.from("payments").select("amount, paid_at, purchase_id").eq("status", "PAID"),
   ]);
 
   // Meta spend + campaign table for the selected range.
@@ -237,30 +259,46 @@ export default async function DashboardPage({
     ...new Set((confirmedMetaTouchpointsRes.data ?? []).map((t) => t.lead_id)),
   ];
   const confirmedMetaLeadsExistOverall = confirmedMetaLeadIds.length > 0;
-  let confirmedMetaRevenueMinor = 0;
+  // Purchase ids for confirmed-Meta leads — computed once, ALL-TIME (not
+  // range-scoped), then reused for both the selected-range card and the
+  // monthly breakdown below, so a purchase/payment is recognized as
+  // confirmed-Meta-attributed regardless of which range happens to be
+  // selected right now.
+  let confirmedMetaPurchaseIds: string[] = [];
   if (confirmedMetaLeadsExistOverall) {
     const { data: purchasesForConfirmedLeads } = await supabase
       .from("purchases")
       .select("id")
       .in("lead_id", confirmedMetaLeadIds);
-    const purchaseIds = (purchasesForConfirmedLeads ?? []).map((p) => p.id);
-    if (purchaseIds.length > 0) {
-      const { data: confirmedPayments } = await supabase
-        .from("payments")
-        .select("amount")
-        .eq("status", "PAID")
-        .gte("paid_at", range.sinceDate)
-        .lte("paid_at", range.untilDate)
-        .in("purchase_id", purchaseIds);
-      confirmedMetaRevenueMinor = (confirmedPayments ?? []).reduce(
-        (s, p) => s + p.amount,
-        0
-      );
-    }
+    confirmedMetaPurchaseIds = (purchasesForConfirmedLeads ?? []).map((p) => p.id);
   }
+  const confirmedMetaPurchaseIdSet = new Set(confirmedMetaPurchaseIds);
+  const confirmedMetaRevenueMinor = (revenuePaymentsInRangeRes.data ?? []).reduce(
+    (s, p) => (confirmedMetaPurchaseIdSet.has(p.purchase_id) ? s + p.amount : s),
+    0
+  );
   const confirmedMetaRoas = confirmedMetaLeadsExistOverall
     ? safeDivide(confirmedMetaRevenueMinor, metaSpendMinor)
     : null;
+
+  // Monthly performance — real calendar months, all-time history (not
+  // cut at the currently-selected range), same attribution/formula
+  // rules as the range-scoped section above.
+  const monthlyMetrics = buildMonthlyMetrics({
+    metaRows: (allMetaRowsRes.data ?? []) as unknown as MetaDailyRow[],
+    leads: (allLeadsWithTouchpointsRes.data ?? []) as unknown as {
+      id: string;
+      created_at: string;
+      touchpoints: LeadTouchpointForAttribution[];
+    }[],
+    wonEvents: allWonEventsRes.data ?? [],
+    payments: allPaidPaymentsRes.data ?? [],
+    confirmedMetaPurchaseIds,
+    currentMonthKey: currentMonthKey(),
+    monthKeyOf,
+    previousMonthKeyOf,
+    formatMonthLabel,
+  });
 
   const marketingData: MarketingPerformanceData = {
     range,
@@ -533,6 +571,7 @@ export default async function DashboardPage({
 
       <div id="marketing">
         <MarketingPerformance data={marketingData} />
+        <MonthlyPerformance months={monthlyMetrics} />
       </div>
     </div>
   );

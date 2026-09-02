@@ -95,3 +95,57 @@ export function resolveMarketingRange(rawKey: string | undefined): ResolvedMarke
     untilTimestampExclusive: untilExclusiveDay.toISOString(),
   };
 }
+
+// ------------------------------------------------------------------
+// Calendar-month helpers — for the monthly business-performance
+// section. Real calendar months (not rolling windows), same local-Date
+// convention as the rest of this file.
+// ------------------------------------------------------------------
+
+/** "YYYY-MM" — a sortable, locale-independent calendar-month key. */
+export type MonthKey = string;
+
+export function monthKeyOf(value: string | Date): MonthKey {
+  const d = typeof value === "string" ? new Date(value) : value;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+export function currentMonthKey(): MonthKey {
+  return monthKeyOf(new Date());
+}
+
+export function previousMonthKeyOf(key: MonthKey): MonthKey {
+  const [y, m] = key.split("-").map(Number);
+  const prev = toLocalDateOnly(y, m - 2, 1); // m is 1-based; -2 => previous month, 0-based
+  return monthKeyOf(prev);
+}
+
+/** Hebrew month + year, e.g. "אוגוסט 2026". */
+const monthLabelFormatter = new Intl.DateTimeFormat("he-IL", {
+  month: "long",
+  year: "numeric",
+});
+
+export function formatMonthLabel(key: MonthKey): string {
+  const [y, m] = key.split("-").map(Number);
+  return monthLabelFormatter.format(toLocalDateOnly(y, m - 1, 1));
+}
+
+/** [start, endExclusive) as ISO timestamps, for timestamptz columns. */
+export function monthTimestampBounds(key: MonthKey): {
+  startTimestamp: string;
+  endTimestampExclusive: string;
+} {
+  const [y, m] = key.split("-").map(Number);
+  const start = toLocalDateOnly(y, m - 1, 1);
+  const endExclusive = toLocalDateOnly(y, m, 1);
+  return { startTimestamp: start.toISOString(), endTimestampExclusive: endExclusive.toISOString() };
+}
+
+/** [startDate, endDate] as YYYY-MM-DD strings, inclusive — for `date` columns. */
+export function monthDateBounds(key: MonthKey): { startDate: string; endDate: string } {
+  const [y, m] = key.split("-").map(Number);
+  const start = toLocalDateOnly(y, m - 1, 1);
+  const end = toLocalDateOnly(y, m, 0); // day 0 of next month = last day of this month
+  return { startDate: toDateString(start), endDate: toDateString(end) };
+}

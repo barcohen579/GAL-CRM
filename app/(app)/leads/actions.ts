@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { classifyDeleteLeadError } from "@/lib/crm/delete-lead";
 
 export type CreateLeadState = {
   error: string | null;
@@ -205,4 +207,37 @@ export async function convertLeadToWon(
   revalidatePath("/payments");
 
   return { error: null, success: true };
+}
+
+// ============================================================
+// Deletion
+// ============================================================
+
+export type DeleteLeadState = { error: string | null };
+
+// Permanently deletes a lead via the atomic, safety-gated
+// delete_lead_safely() RPC (all-or-nothing — see that function's own
+// comments for exactly what it does and does not delete). On success,
+// redirects to /leads?deleted=1 rather than returning normally, so the
+// caller never needs its own "now navigate away" branch. Error ->
+// Hebrew-message mapping lives in lib/crm/delete-lead.ts (extracted
+// so it's unit-testable — a "use server" file may only export async
+// Server Actions).
+export async function deleteLead(
+  leadId: string
+): Promise<DeleteLeadState> {
+  const supabase = await createClient();
+
+  const { error } = await supabase.rpc("delete_lead_safely", {
+    p_lead_id: leadId,
+  });
+
+  const message = classifyDeleteLeadError(error);
+  if (message) {
+    return { error: message };
+  }
+
+  revalidatePath("/leads");
+  revalidatePath("/dashboard");
+  redirect("/leads?deleted=1");
 }

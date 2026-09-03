@@ -12,7 +12,12 @@ import type { LeadWithRelations } from "@/lib/crm/types";
 export const metadata: Metadata = { title: "לידים — GAL CRM" };
 export const dynamic = "force-dynamic";
 
-export default async function LeadsPage() {
+export default async function LeadsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ deleted?: string }>;
+}) {
+  const { deleted } = await searchParams;
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -45,6 +50,12 @@ export default async function LeadsPage() {
       {error && (
         <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
           שגיאה בטעינת הלידים: {error.message}
+        </p>
+      )}
+
+      {deleted === "1" && (
+        <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          הליד נמחק בהצלחה.
         </p>
       )}
 

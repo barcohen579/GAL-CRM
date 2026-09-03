@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LeadStageControl } from "@/components/leads/lead-stage-control";
+import { DeleteLeadButton } from "@/components/leads/delete-lead-button";
 import { CreateFollowUpDialog } from "@/components/follow-ups/create-follow-up-dialog";
 import { FollowUpTaskActions } from "@/components/follow-ups/follow-up-task-actions";
 import { Timeline } from "@/components/leads/timeline";
@@ -73,16 +74,19 @@ export default async function LeadDetailsPage({
         חזרה ללידים
       </Link>
 
-      <div className="mb-6 flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
-          {lead.contact.full_name}
-        </h1>
-        <LeadStageControl
-          leadId={lead.id}
-          stage={lead.stage}
-          contactName={lead.contact.full_name}
-          size="md"
-        />
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
+            {lead.contact.full_name}
+          </h1>
+          <LeadStageControl
+            leadId={lead.id}
+            stage={lead.stage}
+            contactName={lead.contact.full_name}
+            size="md"
+          />
+        </div>
+        <DeleteLeadButton leadId={lead.id} />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

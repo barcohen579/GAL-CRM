@@ -24,7 +24,7 @@ export default async function PaymentsPage() {
   const { data, error } = await supabase
     .from("payments")
     .select(
-      `id, amount, currency, paid_at, method, status,
+      `id, amount, currency, paid_at, method, status, is_auto_generated,
        purchase:purchases(id, service_type, custom_service_name, customer:customers(id, contact:contacts(full_name)))`
     )
     .order("paid_at", { ascending: false });
@@ -105,13 +105,14 @@ export default async function PaymentsPage() {
                     {PAYMENT_METHOD_LABELS[payment.method] ?? payment.method}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-3">
+                <div className="flex shrink-0 items-center gap-2">
                   <span className="text-sm font-semibold text-zinc-900">
                     {formatMoney(payment.amount, payment.currency)}
                   </span>
                   <Badge tone={PAYMENT_STATUS_TONE[payment.status] ?? "neutral"}>
                     {PAYMENT_STATUS_LABELS[payment.status] ?? payment.status}
                   </Badge>
+                  {payment.is_auto_generated && <Badge tone="info">אוטומטי</Badge>}
                 </div>
               </li>
             ))}

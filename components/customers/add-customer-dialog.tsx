@@ -17,6 +17,7 @@ import {
   PAYMENT_METHOD_LABELS,
   TOUCHPOINT_CHANNELS,
   TOUCHPOINT_CHANNEL_LABELS,
+  RECURRENCE_LABELS,
 } from "@/lib/crm/constants";
 
 const initialState: CreateCustomerState = { error: null };
@@ -54,6 +55,7 @@ export function AddCustomerDialog({
   const [serviceType, setServiceType] = useState("");
   const [recordPayment, setRecordPayment] = useState(false);
   const [source, setSource] = useState("");
+  const [recurrence, setRecurrence] = useState("ONE_TIME");
 
   // No "on success" effect needed here (unlike e.g. WonConversionDialog):
   // a successful submission redirects server-side (see the action),
@@ -78,6 +80,7 @@ export function AddCustomerDialog({
           setServiceType("");
           setRecordPayment(false);
           setSource("");
+          setRecurrence("ONE_TIME");
         }}
         className="w-full max-w-lg rounded-2xl border border-zinc-200 p-0 text-right shadow-xl backdrop:bg-zinc-900/40"
       >
@@ -249,6 +252,27 @@ export function AddCustomerDialog({
                   />
                 </div>
               )}
+
+              <div className="sm:col-span-2 space-y-1">
+                <label htmlFor="cust_recurrence" className={labelClass}>
+                  סוג תשלום
+                </label>
+                <select
+                  id="cust_recurrence"
+                  name="recurrence"
+                  value={recurrence}
+                  onChange={(e) => setRecurrence(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="ONE_TIME">{RECURRENCE_LABELS.ONE_TIME}</option>
+                  <option value="RECURRING_MONTHLY">{RECURRENCE_LABELS.RECURRING_MONTHLY}</option>
+                </select>
+                {recurrence === "RECURRING_MONTHLY" && (
+                  <p className="text-[11px] text-zinc-400">
+                    יחויב אוטומטית כל חודש מהמחיר שהוזן למעלה, עד שייעצר ידנית.
+                  </p>
+                )}
+              </div>
 
               <div className="sm:col-span-2 space-y-1">
                 <label htmlFor="cust_purchase_notes" className={labelClass}>

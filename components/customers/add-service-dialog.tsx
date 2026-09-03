@@ -8,6 +8,7 @@ import {
   SERVICE_TYPE_LABELS,
   PAYMENT_METHODS,
   PAYMENT_METHOD_LABELS,
+  RECURRENCE_LABELS,
 } from "@/lib/crm/constants";
 
 const initialState: AddPurchaseState = { error: null };
@@ -32,6 +33,7 @@ export function AddServiceDialog({ customerId }: { customerId: string }) {
   const [state, formAction, isPending] = useActionState(addPurchase, initialState);
   const [serviceType, setServiceType] = useState("");
   const [recordPayment, setRecordPayment] = useState(false);
+  const [recurrence, setRecurrence] = useState("ONE_TIME");
 
   useEffect(() => {
     // Closing the dialog fires its own onClose handler below, which
@@ -59,6 +61,7 @@ export function AddServiceDialog({ customerId }: { customerId: string }) {
           formRef.current?.reset();
           setServiceType("");
           setRecordPayment(false);
+          setRecurrence("ONE_TIME");
         }}
         className="w-full max-w-md rounded-2xl border border-zinc-200 p-0 text-right shadow-xl backdrop:bg-zinc-900/40"
       >
@@ -133,6 +136,27 @@ export function AddServiceDialog({ customerId }: { customerId: string }) {
                 className={`${inputClass} text-left`}
                 placeholder="300"
               />
+            </div>
+
+            <div className="space-y-1">
+              <label htmlFor="svc_recurrence" className={labelClass}>
+                סוג תשלום
+              </label>
+              <select
+                id="svc_recurrence"
+                name="recurrence"
+                value={recurrence}
+                onChange={(e) => setRecurrence(e.target.value)}
+                className={inputClass}
+              >
+                <option value="ONE_TIME">{RECURRENCE_LABELS.ONE_TIME}</option>
+                <option value="RECURRING_MONTHLY">{RECURRENCE_LABELS.RECURRING_MONTHLY}</option>
+              </select>
+              {recurrence === "RECURRING_MONTHLY" && (
+                <p className="text-[11px] text-zinc-400">
+                  יחויב אוטומטית כל חודש מהמחיר שהוזן למעלה, עד שייעצר ידנית.
+                </p>
+              )}
             </div>
 
             <div className="space-y-1">

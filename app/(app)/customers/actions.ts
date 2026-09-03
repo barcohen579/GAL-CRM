@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { findMatchingContactId } from "@/lib/crm/contact-matching";
+import { firstOfMonth, addCalendarMonths } from "@/lib/crm/recurring";
 
 function optionalString(value: FormDataEntryValue | null): string | null {
   const s = typeof value === "string" ? value.trim() : "";
@@ -75,8 +76,19 @@ export async function createCustomerDirectly(
   if (!Number.isFinite(priceNis) || priceNis < 0) {
     return { error: "המחיר שהוזן אינו תקין." };
   }
-  // ₪ -> integer agorot. Never store money as a float.
+  // ₪ -> integer agorot. Never store money as a float. For a recurring
+  // purchase, this doubles as "the current monthly amount" — see
+  // supabase/migrations/20260903150000_..._recurring_billing_schema.sql
+  // for why there's no separate recurring-amount column.
   const agreedPriceAmount = Math.round(priceNis * 100);
+
+  // "סוג תשלום" — recurrence is explicit, never inferred from
+  // service_type (a Group Training could be either a one-time trial or
+  // an ongoing monthly membership; only the user knows which this is).
+  const recurrence =
+    optionalString(formData.get("recurrence")) === "RECURRING_MONTHLY"
+      ? "RECURRING_MONTHLY"
+      : "ONE_TIME";
 
   // The optional first-payment section: amount/date/method travel
   // together — either all three are meaningfully present, or none are
@@ -106,6 +118,22 @@ export async function createCustomerDirectly(
   // customer), otherwise today. Not asked as a separate form field —
   // keeps this a short flow, not an admin database form.
   const startDate = paymentPaidAt ?? todayIso();
+
+  // next_billing_date (recurring only): if a first payment is being
+  // recorded right now, that payment covers ITS OWN month (the RPC
+  // sets its billing_cycle to match — see the migration), so the next
+  // AUTO-generated cycle is the month after it. Otherwise nothing has
+  // been paid for the very first cycle yet — it starts owing from
+  // start_date's own month, so the scheduled job picks it up whenever
+  // that month has begun. Either way this is a plain first-of-month
+  // date computed once here, never a separate form field (per the
+  // "keep this extremely simple" requirement).
+  const nextBillingDate =
+    recurrence === "RECURRING_MONTHLY"
+      ? paymentPaidAt
+        ? addCalendarMonths(firstOfMonth(paymentPaidAt), 1)
+        : firstOfMonth(startDate)
+      : null;
 
   const supabase = await createClient();
 
@@ -143,13 +171,14 @@ export async function createCustomerDirectly(
       p_custom_service_name: serviceType === "OTHER" ? customServiceName : null,
       p_purchase_notes: purchaseNotes,
       p_agreed_price_amount: agreedPriceAmount,
-      p_recurrence: "ONE_TIME",
+      p_recurrence: recurrence,
       p_start_date: startDate,
       p_payment_amount: paymentAmount,
       p_payment_paid_at: paymentPaidAt,
       p_payment_method: paymentMethod,
       p_payment_notes: paymentNotes,
       p_referrer_customer_id: referrerCustomerId,
+      p_next_billing_date: nextBillingDate,
     })
     .single();
 
@@ -218,8 +247,16 @@ export async function addPurchase(
   if (!Number.isFinite(priceNis) || priceNis < 0) {
     return { error: "המחיר שהוזן אינו תקין." };
   }
-  // ₪ -> integer agorot. Never store money as a float.
+  // ₪ -> integer agorot. Never store money as a float. For a recurring
+  // purchase, this doubles as "the current monthly amount".
   const agreedPriceAmount = Math.round(priceNis * 100);
+
+  // "סוג תשלום" — see the identical comment in createCustomerDirectly
+  // above for why this is always explicit, never inferred.
+  const recurrence =
+    optionalString(formData.get("recurrence")) === "RECURRING_MONTHLY"
+      ? "RECURRING_MONTHLY"
+      : "ONE_TIME";
 
   const paymentAmountRaw = optionalString(formData.get("payment_amount"));
   const paymentPaidAtInput = optionalString(formData.get("payment_paid_at"));
@@ -244,6 +281,18 @@ export async function addPurchase(
   // one is given, otherwise today — not asked as a separate field.
   const startDate = paymentPaidAt ?? todayIso();
 
+  // Same next_billing_date reasoning as createCustomerDirectly above —
+  // an immediate first payment covers its own month (billing_cycle set
+  // below), so the next auto cycle starts the month after it;
+  // otherwise the first cycle itself is still owed, starting from
+  // start_date's month.
+  const nextBillingDate =
+    recurrence === "RECURRING_MONTHLY"
+      ? paymentPaidAt
+        ? addCalendarMonths(firstOfMonth(paymentPaidAt), 1)
+        : firstOfMonth(startDate)
+      : null;
+
   const supabase = await createClient();
 
   const { data: purchase, error: purchaseError } = await supabase
@@ -255,10 +304,11 @@ export async function addPurchase(
       custom_service_name: serviceType === "OTHER" ? customServiceName : null,
       agreed_price_amount: agreedPriceAmount,
       agreed_price_currency: "ILS",
-      recurrence: "ONE_TIME",
+      recurrence,
       start_date: startDate,
       status: "ACTIVE",
       notes: purchaseNotes,
+      next_billing_date: nextBillingDate,
     })
     .select("id")
     .single();
@@ -270,6 +320,13 @@ export async function addPurchase(
   }
 
   if (paymentAmount !== null) {
+    // The first cycle payment for a recurring purchase occupies its
+    // own billing_cycle slot — see payments_purchase_billing_cycle_key
+    // — exactly like create_customer_directly's own first-payment
+    // handling, so the scheduled job never re-generates this month.
+    const billingCycle =
+      recurrence === "RECURRING_MONTHLY" && paymentPaidAt ? firstOfMonth(paymentPaidAt) : null;
+
     const { error: paymentError } = await supabase.from("payments").insert({
       purchase_id: purchase.id,
       amount: paymentAmount,
@@ -278,6 +335,8 @@ export async function addPurchase(
       method: paymentMethod,
       status: "PAID",
       notes: paymentNotes,
+      billing_cycle: billingCycle,
+      is_auto_generated: false,
     });
     if (paymentError) {
       return {
@@ -290,6 +349,141 @@ export async function addPurchase(
   revalidatePath("/customers");
   revalidatePath("/dashboard");
   revalidatePath("/payments");
+
+  return { error: null, success: true };
+}
+
+// ============================================================
+// Monthly recurring billing management
+// ("הפעלת/הפסקת/עדכון מחיר של חיוב חודשי")
+// ============================================================
+
+export type RecurringBillingState = { error: string | null; success?: boolean };
+
+// "הפעלת חיוב חודשי" — turns an EXISTING, currently non-recurring
+// ACTIVE Purchase into an ongoing monthly one (works for the very
+// first customer this is enabled on, or any later existing Purchase).
+// Plain single-row UPDATE, no RPC: purchases already has full CRUD RLS
+// for authenticated CRM users, and there is no second table to write
+// atomically alongside it. Gal picks the monthly amount and the next
+// billing date directly — deliberately NOT inferred from "has this
+// month already been paid", which would require guessing at intent;
+// asking directly is simpler and unambiguous (see lib/crm/recurring.ts).
+export async function enableRecurringBilling(
+  _prevState: RecurringBillingState,
+  formData: FormData
+): Promise<RecurringBillingState> {
+  const purchaseId = optionalString(formData.get("purchase_id"));
+  const customerId = optionalString(formData.get("customer_id"));
+  if (!purchaseId || !customerId) {
+    return { error: "שגיאה פנימית: הרכישה לא זוהתה." };
+  }
+
+  const priceRaw = optionalString(formData.get("monthly_amount"));
+  if (!priceRaw) return { error: "יש להזין סכום חודשי." };
+  const priceNis = Number(priceRaw.replace(/,/g, ""));
+  if (!Number.isFinite(priceNis) || priceNis < 0) {
+    return { error: "הסכום שהוזן אינו תקין." };
+  }
+  // ₪ -> integer agorot. Never store money as a float.
+  const monthlyAmount = Math.round(priceNis * 100);
+
+  const nextBillingDateInput = optionalString(formData.get("next_billing_date"));
+  if (!nextBillingDateInput) return { error: "יש לבחור תאריך לחיוב הבא." };
+  const nextBillingDate = firstOfMonth(nextBillingDateInput);
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("purchases")
+    .update({
+      recurrence: "RECURRING_MONTHLY",
+      status: "ACTIVE",
+      agreed_price_amount: monthlyAmount,
+      next_billing_date: nextBillingDate,
+    })
+    .eq("id", purchaseId);
+
+  if (error) {
+    return { error: `לא הצלחנו להפעיל חיוב חודשי: ${error.message}` };
+  }
+
+  revalidatePath(`/customers/${customerId}`);
+  revalidatePath("/customers");
+
+  return { error: null, success: true };
+}
+
+// "הפסקת חיוב חודשי" — stops every FUTURE automatic payment. Never
+// deletes or edits any existing Purchase/Payment — only the two
+// billing-control fields move. recurrence itself is deliberately left
+// as RECURRING_MONTHLY (not reset to ONE_TIME): this WAS a monthly
+// service, and that history shouldn't disappear just because it
+// stopped; status = CANCELLED plus next_billing_date = NULL is what
+// actually gates generate_due_recurring_payments() (see its own
+// migration), and CANCELLED already renders as the familiar red "בוטל"
+// badge everywhere purchase status is shown. Called directly (not a
+// useActionState form action) — same pattern as deleteLead, for a
+// confirm-dialog button rather than a form.
+export async function stopRecurringBilling(
+  purchaseId: string,
+  customerId: string
+): Promise<{ error: string | null }> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("purchases")
+    .update({ status: "CANCELLED", next_billing_date: null })
+    .eq("id", purchaseId);
+
+  if (error) {
+    return { error: `לא הצלחנו להפסיק את החיוב החודשי: ${error.message}` };
+  }
+
+  revalidatePath(`/customers/${customerId}`);
+  revalidatePath("/customers");
+
+  return { error: null };
+}
+
+export type UpdatePriceState = { error: string | null; success?: boolean };
+
+// "עדכון מחיר חודשי" — changes the amount used starting the NEXT
+// un-generated cycle only. Every already-generated payment already
+// froze its own amount permanently (payments.amount is immutable —
+// prevent_payment_fact_changes), so this can never rewrite a
+// historical figure; it only ever updates
+// purchases.agreed_price_amount, which generate_due_recurring_payments()
+// reads fresh at generation time — no separate price-history table.
+export async function updateRecurringPrice(
+  _prevState: UpdatePriceState,
+  formData: FormData
+): Promise<UpdatePriceState> {
+  const purchaseId = optionalString(formData.get("purchase_id"));
+  const customerId = optionalString(formData.get("customer_id"));
+  if (!purchaseId || !customerId) {
+    return { error: "שגיאה פנימית: הרכישה לא זוהתה." };
+  }
+
+  const priceRaw = optionalString(formData.get("monthly_amount"));
+  if (!priceRaw) return { error: "יש להזין סכום חודשי חדש." };
+  const priceNis = Number(priceRaw.replace(/,/g, ""));
+  if (!Number.isFinite(priceNis) || priceNis < 0) {
+    return { error: "הסכום שהוזן אינו תקין." };
+  }
+  const monthlyAmount = Math.round(priceNis * 100);
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("purchases")
+    .update({ agreed_price_amount: monthlyAmount })
+    .eq("id", purchaseId)
+    .eq("recurrence", "RECURRING_MONTHLY");
+
+  if (error) {
+    return { error: `לא הצלחנו לעדכן את המחיר: ${error.message}` };
+  }
+
+  revalidatePath(`/customers/${customerId}`);
+  revalidatePath("/customers");
 
   return { error: null, success: true };
 }

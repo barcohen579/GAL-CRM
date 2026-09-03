@@ -82,6 +82,10 @@ export type PurchaseSummary = {
   recurrence: string;
   agreed_price_amount: number;
   agreed_price_currency: string;
+  // First-of-month date of the next un-generated recurring cycle; null
+  // when not currently auto-billing (ONE_TIME, or stopped) — see
+  // supabase/migrations/20260903150000_..._recurring_billing_schema.sql.
+  next_billing_date: string | null;
 };
 
 export type CustomerWithRelations = {
@@ -101,6 +105,9 @@ export type PaymentWithRelations = {
   status: string;
   notes: string | null;
   created_at: string;
+  // True only for a payment generate_due_recurring_payments() created
+  // — drives the "אוטומטי" badge. Never set by any user-facing action.
+  is_auto_generated: boolean;
   purchase: {
     id: string;
     service_type: ServiceType;

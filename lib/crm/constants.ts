@@ -169,8 +169,8 @@ export const PAYMENT_METHOD_LABELS: Record<string, string> = {
 export const PAYMENT_STATUSES = ["PAID", "REFUNDED", "FAILED"] as const;
 
 export const RECURRENCE_LABELS: Record<string, string> = {
-  ONE_TIME: "חד פעמי",
-  RECURRING_MONTHLY: "חודשי (מתחדש)",
+  ONE_TIME: "תשלום חד פעמי",
+  RECURRING_MONTHLY: "תשלום חודשי קבוע",
 };
 
 export const PURCHASE_STATUS_TONE: Record<string, Tone> = {

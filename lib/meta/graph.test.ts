@@ -89,3 +89,66 @@ test("graph.ts source never calls console.* (field_data/PII must never be logged
   const source = fs.readFileSync(new URL("./graph.ts", import.meta.url), "utf8");
   assert.ok(!/console\.\w+\(/.test(source), "lib/meta/graph.ts must not log anything itself");
 });
+
+// Regression coverage for the Phase 3D production incident: the
+// Lead-detail node (/{leadgen_id}) uses "adset_id" — NOT "adgroup_id",
+// which is a different Meta API surface (the webhook notification
+// payload; see lib/meta/webhook-payload.ts and its own tests).
+// Requesting "adgroup_id" here fails the ENTIRE Graph API call
+// (HTTP 400 / OAuthException 100), confirmed live in production
+// against a real lead before this fix.
+
+test("fetchLeadByLeadgenId: requests adset_id, never adgroup_id, in the Graph API fields param", async () => {
+  let requestedUrl: string | null = null;
+  await withMockedFetch(
+    (async (url: string) => {
+      requestedUrl = String(url);
+      return new Response(JSON.stringify({ id: "lead1", field_data: [] }), { status: 200 });
+    }) as unknown as typeof fetch,
+    async () => {
+      await fetchLeadByLeadgenId("lead1", "fake-page-token");
+    }
+  );
+
+  assert.ok(requestedUrl, "a request was made");
+  const fields = new URL(requestedUrl!).searchParams.get("fields") ?? "";
+  assert.ok(fields.includes("adset_id"), `fields must request adset_id — got: ${fields}`);
+  assert.ok(!fields.includes("adgroup_id"), `fields must NOT request adgroup_id — got: ${fields}`);
+});
+
+test("fetchLeadByLeadgenId: maps the Lead-detail response's adset_id to internal adsetId", async () => {
+  const record = await withMockedFetch(
+    (async () =>
+      new Response(
+        JSON.stringify({
+          id: "lead1",
+          created_time: "2026-01-01T00:00:00+0000",
+          ad_id: "ad1",
+          adset_id: "the-real-adset-id",
+          campaign_id: "camp1",
+          form_id: "form1",
+          field_data: [],
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch,
+    async () => fetchLeadByLeadgenId("lead1", "fake-page-token")
+  );
+
+  assert.equal(record.adsetId, "the-real-adset-id");
+});
+
+test("fetchLeadByLeadgenId: a stray adgroup_id in the response body is ignored, not mistaken for adsetId", async () => {
+  // Defends against silently reverting the fix: even if some future
+  // response happened to include an "adgroup_id" key, it must never be
+  // read as the ad set id on this node.
+  const record = await withMockedFetch(
+    (async () =>
+      new Response(
+        JSON.stringify({ id: "lead1", adgroup_id: "should-be-ignored", field_data: [] }),
+        { status: 200 }
+      )) as unknown as typeof fetch,
+    async () => fetchLeadByLeadgenId("lead1", "fake-page-token")
+  );
+
+  assert.equal(record.adsetId, null);
+});

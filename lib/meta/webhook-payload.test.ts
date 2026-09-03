@@ -39,6 +39,36 @@ test("parseLeadgenWebhookEntries: extracts a single leadgen change", () => {
   });
 });
 
+// Regression coverage for the Phase 3D production incident: the
+// leadgen WEBHOOK NOTIFICATION payload's ad-set field is genuinely
+// named "adgroup_id" — a DIFFERENT Meta API surface from the
+// Lead-detail node (/{leadgen_id}), which uses "adset_id" (see
+// lib/meta/graph.ts and its own tests). This file's use of
+// "adgroup_id" is correct and must never be "fixed" to match the
+// other surface.
+test("parseLeadgenWebhookEntries: the webhook's adgroup_id field still maps to internal adsetId", () => {
+  const body = {
+    object: "page",
+    entry: [
+      {
+        id: "166795883755512",
+        changes: [
+          {
+            field: "leadgen",
+            value: {
+              leadgen_id: "lead999",
+              page_id: "166795883755512",
+              adgroup_id: "webhook-adset-value",
+            },
+          },
+        ],
+      },
+    ],
+  };
+  const entries = parseLeadgenWebhookEntries(body);
+  assert.equal(entries[0].adsetId, "webhook-adset-value");
+});
+
 test("parseLeadgenWebhookEntries: handles multiple entries and multiple changes", () => {
   const body = {
     object: "page",

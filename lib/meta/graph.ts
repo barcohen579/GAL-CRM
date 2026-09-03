@@ -140,11 +140,25 @@ export type FetchLeadFn = (leadgenId: string, pageAccessToken: string) => Promis
 // Fetches one lead's submission by id, read-only (GET /{leadgen_id}).
 // This is the only call in the whole ingestion pipeline that returns
 // field_data (PII) — see the file-level warning above.
+//
+// IMPORTANT field-name distinction (root-caused live in production —
+// see the Phase 3D incident report): the Lead node's ad-set field is
+// named "adset_id" here. This is NOT the same field name as
+// lib/meta/webhook-payload.ts's "adgroup_id" — that one is Meta's
+// field name on the separate leadgen WEBHOOK NOTIFICATION payload, a
+// different API surface with its own (older) naming. Requesting
+// "adgroup_id" on THIS node fails the entire Graph API call with
+// HTTP 400 / OAuthException 100 "Tried accessing nonexisting field
+// (adgroup_id)" — confirmed live against a real lead — because the
+// `fields` parameter is all-or-nothing: one invalid field name fails
+// the whole request, not just that one field. Never "fix" this by
+// changing webhook-payload.ts's "adgroup_id" — that one is correct
+// exactly as it is for its own (different) payload shape.
 type MetaLeadDetailResponse = {
   id: string;
   created_time?: string;
   ad_id?: string;
-  adgroup_id?: string;
+  adset_id?: string;
   campaign_id?: string;
   form_id?: string;
   field_data?: MetaFieldDatum[];
@@ -153,14 +167,14 @@ type MetaLeadDetailResponse = {
 export const fetchLeadByLeadgenId: FetchLeadFn = async (leadgenId, pageAccessToken) => {
   const json = await metaGet<MetaLeadDetailResponse>(
     `/${leadgenId}`,
-    { fields: "id,created_time,ad_id,adgroup_id,campaign_id,form_id,field_data" },
+    { fields: "id,created_time,ad_id,adset_id,campaign_id,form_id,field_data" },
     pageAccessToken
   );
   return {
     id: json.id,
     createdTimeIso: typeof json.created_time === "string" ? json.created_time : null,
     adId: json.ad_id ?? null,
-    adsetId: json.adgroup_id ?? null,
+    adsetId: json.adset_id ?? null,
     campaignId: json.campaign_id ?? null,
     formId: json.form_id ?? null,
     fieldData: Array.isArray(json.field_data) ? json.field_data : [],

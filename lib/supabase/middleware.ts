@@ -2,8 +2,10 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server.js";
 import { getSupabaseEnv } from "./env.ts";
 
-// Paths that never require a CRM session.
-const PUBLIC_PATHS = ["/login"];
+// Paths that never require a CRM session. /privacy must be reachable
+// by a fully unauthenticated visitor (Meta's app-review process
+// included) — see app/privacy/page.tsx.
+const PUBLIC_PATHS = ["/login", "/privacy"];
 
 // API routes bypass this middleware's session handling ENTIRELY (no
 // Supabase client, no getUser() call, no redirect) — added in the

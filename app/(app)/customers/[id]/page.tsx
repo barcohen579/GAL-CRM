@@ -11,6 +11,7 @@ import { FollowUpTaskActions } from "@/components/follow-ups/follow-up-task-acti
 import { RecordPaymentDialog } from "@/components/payments/record-payment-dialog";
 import { MarkPaymentUnpaidButton } from "@/components/payments/mark-payment-unpaid-button";
 import { AddServiceDialog } from "@/components/customers/add-service-dialog";
+import { EditContactDialog } from "@/components/customers/edit-contact-dialog";
 import { EnableRecurringDialog } from "@/components/customers/enable-recurring-dialog";
 import { StopRecurringButton } from "@/components/customers/stop-recurring-button";
 import { UpdateRecurringPriceDialog } from "@/components/customers/update-recurring-price-dialog";
@@ -167,7 +168,19 @@ export default async function CustomerDetailsPage({
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <Card>
-            <CardHeader title="פרטי הלקוחה" />
+            <CardHeader
+              title="פרטי הלקוחה"
+              action={
+                <EditContactDialog
+                  contactId={customer.contact.id}
+                  customerId={customer.id}
+                  fullName={customer.contact.full_name}
+                  phone={customer.contact.phone}
+                  email={customer.contact.email}
+                  instagramUsername={customer.contact.instagram_username}
+                />
+              }
+            />
             <div className="grid grid-cols-1 gap-4 px-5 py-4 sm:grid-cols-2">
               <div>
                 <p className="text-xs font-medium text-zinc-500">לקוחה מאז</p>

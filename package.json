@@ -15,7 +15,8 @@
     "db:test:create-customer": "supabase db query --linked -f supabase/tests/create_customer_directly.test.sql",
     "db:test:multi-service": "supabase db query --linked -f supabase/tests/multi_service_leads_and_purchases.test.sql",
     "db:test:referrals": "supabase db query --linked -f supabase/tests/referrals.test.sql",
-    "db:test:recurring-billing": "supabase db query --linked -f supabase/tests/recurring_billing.test.sql"
+    "db:test:recurring-billing": "supabase db query --linked -f supabase/tests/recurring_billing.test.sql",
+    "db:test:edit-customer": "supabase db query --linked -f supabase/tests/edit_customer_details.test.sql"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

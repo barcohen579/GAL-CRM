@@ -487,3 +487,101 @@ export async function updateRecurringPrice(
 
   return { error: null, success: true };
 }
+
+// ============================================================
+// Edit Customer Details ("עריכת פרטים")
+// ============================================================
+
+export type UpdateContactState = { error: string | null; success?: boolean };
+
+// Edits the Contact belonging to this Customer — never creates or
+// touches any other row. purchases/payments/recurring config/leads/
+// touchpoints/referrals all reference this same Contact/Customer by
+// id, never by name or by a copy of phone/email, so nothing else needs
+// to change: a referral row's displayed name (e.g. "הופנתה על ידי
+// ...") is read fresh via a join at request time (see /customers/[id]
+// and /leads/[id]'s own queries) — renaming this contact is
+// automatically reflected everywhere the next time those pages render,
+// with no update needed here.
+export async function updateContactDetails(
+  _prevState: UpdateContactState,
+  formData: FormData
+): Promise<UpdateContactState> {
+  const contactId = optionalString(formData.get("contact_id"));
+  const customerId = optionalString(formData.get("customer_id"));
+  if (!contactId || !customerId) {
+    return { error: "שגיאה פנימית: הלקוחה לא זוהתה." };
+  }
+
+  const fullName = optionalString(formData.get("full_name"));
+  if (!fullName) {
+    return { error: "יש להזין שם מלא." };
+  }
+
+  // Empty optional fields are stored as NULL, never "" — same
+  // convention `optionalString` already enforces everywhere else in
+  // this codebase (createLead, createCustomerDirectly, addPurchase, ...).
+  const phone = optionalString(formData.get("phone"));
+  const email = optionalString(formData.get("email"));
+  const instagramUsername = optionalString(formData.get("instagram_username"));
+
+  const supabase = await createClient();
+
+  // Identity-collision protection: the SAME deterministic rule used
+  // everywhere else a Contact is matched — normalized phone, then
+  // normalized email, NEVER by name (lib/crm/contact-matching.ts,
+  // shared with the Meta ingestion pipeline and the Add Customer
+  // flow). Excludes THIS contact from the candidate pool — matching
+  // its own current phone/email back to itself is not a conflict.
+  // Mirrors createCustomerDirectly's own two-query shape exactly.
+  let conflict: { id: string; full_name: string } | null = null;
+  if (phone) {
+    const { data } = await supabase
+      .from("contacts")
+      .select("id, full_name, phone, email")
+      .neq("id", contactId)
+      .not("phone", "is", null)
+      .limit(5000);
+    const matchId = findMatchingContactId(data ?? [], phone, null);
+    if (matchId) conflict = (data ?? []).find((c) => c.id === matchId) ?? null;
+  }
+  if (!conflict && email) {
+    const { data } = await supabase
+      .from("contacts")
+      .select("id, full_name, phone, email")
+      .neq("id", contactId)
+      .not("email", "is", null)
+      .limit(5000);
+    const matchId = findMatchingContactId(data ?? [], null, email);
+    if (matchId) conflict = (data ?? []).find((c) => c.id === matchId) ?? null;
+  }
+  if (conflict) {
+    return {
+      error: `הפרטים שהוזנו כבר שייכים לאיש קשר אחר במערכת (${conflict.full_name}). לא ניתן לשמור שינוי שיוצר כפילות.`,
+    };
+  }
+
+  const { error } = await supabase
+    .from("contacts")
+    .update({
+      full_name: fullName,
+      phone,
+      email,
+      instagram_username: instagramUsername,
+    })
+    .eq("id", contactId);
+
+  if (error) {
+    return { error: `לא הצלחנו לשמור את השינויים: ${error.message}` };
+  }
+
+  // Every page that could display this contact's name (its own
+  // /customers/[id], the /customers list, and any /leads/[id] where
+  // it's shown as a referrer) is already force-dynamic (no caching),
+  // so it re-reads the join fresh on next navigation regardless —
+  // revalidatePath here only needs to cover this page itself.
+  revalidatePath(`/customers/${customerId}`);
+  revalidatePath("/customers");
+
+  return { error: null, success: true };
+}

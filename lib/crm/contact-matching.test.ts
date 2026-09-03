@@ -31,3 +31,25 @@ test("findMatchingContactId: no phone/email given at all -> null", () => {
 test("findMatchingContactId: empty candidate list -> null", () => {
   assert.equal(findMatchingContactId([], "0501234567", "shira@example.com"), null);
 });
+
+// The "Edit Customer Details" identity-collision check
+// (app/(app)/customers/actions.ts::updateContactDetails) reuses this
+// exact function — it excludes the contact being edited from the
+// candidate list at the DB-query level (`.neq("id", contactId)`)
+// before ever calling this function, so from this function's own
+// point of view it's an ordinary match. These two cases pin that
+// specific usage down as a regression guard.
+test("findMatchingContactId (edit-contact usage): a candidate list that already excludes the contact being edited correctly flags a collision with a DIFFERENT contact's phone", () => {
+  // c3 already has 0509999999 -- editing some OTHER contact's phone to
+  // the same number must be caught.
+  assert.equal(findMatchingContactId(candidates, "050-999-9999", null), "c3");
+});
+
+test("findMatchingContactId (edit-contact usage): re-saving a contact's OWN unchanged phone is never a false-positive collision once self is excluded from candidates", () => {
+  // Simulates editing contact c1: the caller's query already excludes
+  // c1 itself, so the remaining candidate list here is c2/c3 only --
+  // c1's own phone must not spuriously "match itself" via some other
+  // candidate.
+  const candidatesExcludingC1 = candidates.filter((c) => c.id !== "c1");
+  assert.equal(findMatchingContactId(candidatesExcludingC1, "0501234567", null), null);
+});

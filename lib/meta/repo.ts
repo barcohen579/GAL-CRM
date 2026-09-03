@@ -107,6 +107,17 @@ export interface MetaIngestionRepo {
 // here (see Phase 3B report) to avoid speculative schema complexity.
 export const CONTACT_CANDIDATE_LIMIT = 5000;
 
+// A row stuck in PROCESSING longer than this is treated as abandoned
+// (the process that claimed it crashed/was killed before finishing —
+// with no separate worker/queue, nothing else would otherwise ever
+// touch it again) and becomes reclaimable — see claimForProcessing
+// below. 10 minutes is generously long for this pipeline's real work
+// (at most two Meta GETs plus a handful of small Supabase calls, all
+// normally sub-second) while still being short enough that a genuine
+// stuck row self-heals well within Meta's own webhook retry window on
+// the next redelivery, or promptly via the manual reprocessing script.
+export const STALE_PROCESSING_MS = 10 * 60 * 1000;
+
 // Supabase's untyped client (this project has no generated Database
 // type — see lib/crm/types.ts's own "hand-written, not codegen" note)
 // returns query results typed loosely. This function's job is purely
@@ -190,11 +201,25 @@ export function createSupabaseMetaIngestionRepo(supabase: SupabaseClient): MetaI
     },
 
     async claimForProcessing(id) {
+      // Also reclaims a row STUCK in PROCESSING past STALE_PROCESSING_MS
+      // (e.g. the process crashed/was killed between claiming and
+      // finishing — with no queue/worker, nothing else would ever move
+      // that row again). This keeps the claim a single atomic
+      // UPDATE ... WHERE: two concurrent callers can still both match
+      // the WHERE clause, but only one UPDATE actually commits first —
+      // Postgres serializes the second against the first's row lock, and
+      // by the time it re-evaluates WHERE the row's status/updated_at
+      // already reflect the winner's change, so the loser's WHERE no
+      // longer matches and it correctly claims nothing. Still exactly
+      // one statement, no advisory lock, no queue.
+      const staleThresholdIso = new Date(Date.now() - STALE_PROCESSING_MS).toISOString();
       const { data, error } = await supabase
         .from("meta_lead_ingestions")
         .update({ status: "PROCESSING" })
         .eq("id", id)
-        .in("status", ["PENDING", "FAILED"])
+        .or(
+          `status.in.(PENDING,FAILED),and(status.eq.PROCESSING,updated_at.lt.${staleThresholdIso})`
+        )
         .select(
           "id, leadgen_id, meta_page_id, meta_form_id, meta_ad_id, meta_adset_id, meta_campaign_id, received_at, processed_at, status, error_message, contact_id, lead_id, touchpoint_id"
         )
@@ -365,7 +390,42 @@ export function createSupabaseMetaIngestionRepo(supabase: SupabaseClient): MetaI
         })
         .select("id")
         .single();
-      if (error || !data) throw new Error(`touchpoint creation failed: ${error?.message ?? "no row returned"}`);
+
+      if (error) {
+        // Self-heals against the DB-level guarantee
+        // (touchpoints_meta_ad_external_ref_key, see the Phase 3C
+        // migration): if this exact race genuinely happens — this call
+        // lost a concurrent insert for the same leadgen_id that the
+        // earlier findTouchpointByExternalRef check didn't catch — and
+        // the winner attached its touchpoint to the SAME lead we also
+        // just resolved, return the winner's id instead of throwing, so
+        // this attempt still completes successfully.
+        //
+        // If the winner's touchpoint belongs to a DIFFERENT lead, this
+        // call's own contact/lead resolution raced against a genuinely
+        // separate in-flight attempt for the same leadgen_id (only
+        // possible via the 10-minute stale-PROCESSING reclaim in
+        // claimForProcessing, for a still-alive-but-very-slow original
+        // attempt — not expected in normal operation). Returning the
+        // wrong lead_id here would silently mismatch the ingestion
+        // row's recorded ids, so this case throws instead: the row is
+        // marked FAILED and retryable, and a retry's own
+        // findTouchpointByExternalRef pre-check will correctly resolve
+        // to the winner's actual contact/lead — see
+        // matchAndCreateCrmEntities.
+        if (error.code === "23505") {
+          const existing = await this.findTouchpointByExternalRef(input.externalRef);
+          if (existing && existing.leadId === input.leadId) return existing.id;
+          if (existing) {
+            throw new Error(
+              "touchpoint creation conflict: this leadgen_id was already attached to a " +
+                "different lead by a concurrent attempt — safe to retry"
+            );
+          }
+        }
+        throw new Error(`touchpoint creation failed: ${error.message}`);
+      }
+      if (!data) throw new Error("touchpoint creation failed: no row returned");
       return data.id as string;
     },
   };

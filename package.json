@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "node --test",
     "meta:sync": "node scripts/meta-sync.mjs",
-    "meta:reprocess-lead": "node scripts/meta-reprocess-lead.ts"
+    "meta:reprocess-lead": "node scripts/meta-reprocess-lead.ts",
+    "meta:webhook-demo": "node scripts/meta-webhook-mock-demo.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

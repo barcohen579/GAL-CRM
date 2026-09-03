@@ -12,7 +12,33 @@ import type {
   MetaIngestionRepo,
   NewIngestionFields,
 } from "./repo.ts";
+import { STALE_PROCESSING_MS } from "./repo.ts";
 import type { MetaLeadRecord } from "./graph.ts";
+
+// Internal-only field mirroring the real table's `updated_at` (bumped
+// by the set_updated_at trigger on every UPDATE) — needed to simulate
+// claimForProcessing's stale-PROCESSING reclaim without an actual
+// clock/DB. Never exposed as part of IngestionRow.
+type FakeIngestionRow = IngestionRow & { _updatedAtMs: number };
+
+function toPublicRow(row: FakeIngestionRow): IngestionRow {
+  return {
+    id: row.id,
+    leadgen_id: row.leadgen_id,
+    meta_page_id: row.meta_page_id,
+    meta_form_id: row.meta_form_id,
+    meta_ad_id: row.meta_ad_id,
+    meta_adset_id: row.meta_adset_id,
+    meta_campaign_id: row.meta_campaign_id,
+    received_at: row.received_at,
+    processed_at: row.processed_at,
+    status: row.status,
+    error_message: row.error_message,
+    contact_id: row.contact_id,
+    lead_id: row.lead_id,
+    touchpoint_id: row.touchpoint_id,
+  };
+}
 
 type FakeContact = { id: string; full_name: string; phone: string | null; email: string | null };
 type FakeLead = { id: string; contact_id: string; stage: string };
@@ -31,7 +57,7 @@ function nextId(prefix: string): string {
 }
 
 export type FakeDb = {
-  ingestions: Map<string, IngestionRow>; // keyed by id
+  ingestions: Map<string, FakeIngestionRow>; // keyed by id
   contacts: Map<string, FakeContact>;
   leads: Map<string, FakeLead>;
   touchpoints: Map<string, FakeTouchpoint>;
@@ -70,19 +96,28 @@ export function createFakeMetaIngestionRepo(db: FakeDb): MetaIngestionRepo {
   return {
     async getIngestionRowByLeadgenId(leadgenId) {
       for (const row of db.ingestions.values()) {
-        if (row.leadgen_id === leadgenId) return { ...row };
+        if (row.leadgen_id === leadgenId) return toPublicRow(row);
       }
       return null;
     },
 
     async getIngestionRowById(id) {
       const row = db.ingestions.get(id);
-      return row ? { ...row } : null;
+      return row ? toPublicRow(row) : null;
     },
 
     async insertIngestionRow(leadgenId, fields: NewIngestionFields) {
+      // Mirrors the real table's UNIQUE(leadgen_id) constraint: if a
+      // row for this leadgen_id already exists (a concurrent "insert"
+      // interleaved before this one), return it instead of creating a
+      // second row — this is what makes the fake meaningful for
+      // concurrency tests (see ingest.test.ts's "duplicate delivery"
+      // tests), not just a happy-path stub.
+      for (const row of db.ingestions.values()) {
+        if (row.leadgen_id === leadgenId) return toPublicRow(row);
+      }
       const id = nextId("ingestion");
-      const row: IngestionRow = {
+      const row: FakeIngestionRow = {
         id,
         leadgen_id: leadgenId,
         meta_page_id: fields.metaPageId,
@@ -97,17 +132,29 @@ export function createFakeMetaIngestionRepo(db: FakeDb): MetaIngestionRepo {
         contact_id: null,
         lead_id: null,
         touchpoint_id: null,
+        _updatedAtMs: Date.now(),
       };
       db.ingestions.set(id, row);
-      return { ...row };
+      return toPublicRow(row);
     },
 
     async claimForProcessing(id) {
+      // Mirrors the real UPDATE ... WHERE status IN (PENDING, FAILED)
+      // OR (status = PROCESSING AND stale) — see repo.ts. This whole
+      // method body runs synchronously (no `await` inside), which is
+      // exactly what makes it atomic under Node's single-threaded
+      // execution: once called, nothing else can interleave until it
+      // returns, matching a single atomic SQL UPDATE statement.
       const row = db.ingestions.get(id);
       if (!row) return null;
-      if (row.status !== "PENDING" && row.status !== "FAILED") return null;
+      const isStaleProcessing =
+        row.status === "PROCESSING" && Date.now() - row._updatedAtMs >= STALE_PROCESSING_MS;
+      if (row.status !== "PENDING" && row.status !== "FAILED" && !isStaleProcessing) {
+        return null;
+      }
       row.status = "PROCESSING";
-      return { ...row };
+      row._updatedAtMs = Date.now();
+      return toPublicRow(row);
     },
 
     async markProcessed(id, ids) {
@@ -119,6 +166,7 @@ export function createFakeMetaIngestionRepo(db: FakeDb): MetaIngestionRepo {
       row.touchpoint_id = ids.touchpointId;
       row.processed_at = new Date().toISOString();
       row.error_message = null;
+      row._updatedAtMs = Date.now();
     },
 
     async markDuplicate(id, ids) {
@@ -130,6 +178,7 @@ export function createFakeMetaIngestionRepo(db: FakeDb): MetaIngestionRepo {
       row.touchpoint_id = ids.touchpointId;
       row.processed_at = new Date().toISOString();
       row.error_message = null;
+      row._updatedAtMs = Date.now();
     },
 
     async markFailed(id, sanitizedErrorMessage) {
@@ -138,6 +187,7 @@ export function createFakeMetaIngestionRepo(db: FakeDb): MetaIngestionRepo {
       row.status = "FAILED" as IngestionStatus;
       row.error_message = sanitizedErrorMessage;
       row.processed_at = null;
+      row._updatedAtMs = Date.now();
     },
 
     async getContactsWithPhone(limit) {
@@ -202,6 +252,19 @@ export function createFakeMetaIngestionRepo(db: FakeDb): MetaIngestionRepo {
     },
 
     async createTouchpoint(input: CreateTouchpointInput) {
+      // Mirrors the DB's partial unique index
+      // (touchpoints_meta_ad_external_ref_key) — see repo.ts's
+      // createTouchpoint for the real self-healing behavior this fake
+      // reproduces.
+      for (const tp of db.touchpoints.values()) {
+        if (tp.external_ref === input.externalRef && tp.channel === "META_AD") {
+          if (tp.lead_id === input.leadId) return tp.id;
+          throw new Error(
+            "touchpoint creation conflict: this leadgen_id was already attached to a " +
+              "different lead by a concurrent attempt — safe to retry"
+          );
+        }
+      }
       const id = nextId("touchpoint");
       db.touchpoints.set(id, {
         id,
@@ -213,6 +276,15 @@ export function createFakeMetaIngestionRepo(db: FakeDb): MetaIngestionRepo {
       return id;
     },
   };
+}
+
+// Test-only helper: backdates an ingestion row's internal "last
+// updated" clock so claimForProcessing's stale-PROCESSING reclaim can
+// be exercised deterministically (see ingest.test.ts).
+export function backdateIngestionRow(db: FakeDb, id: string, ageMs: number): void {
+  const row = db.ingestions.get(id);
+  if (!row) throw new Error("fake: backdateIngestionRow on unknown id");
+  row._updatedAtMs = Date.now() - ageMs;
 }
 
 export function makeFakeFetchLead(record: Partial<MetaLeadRecord> & { fieldData: MetaLeadRecord["fieldData"] }) {

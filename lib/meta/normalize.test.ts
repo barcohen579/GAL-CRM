@@ -28,8 +28,44 @@ test("normalizePhone: rejects too-short input as unusable, not a false match", (
   assert.equal(normalizePhone(undefined), null);
 });
 
+// Phase 3C audit: the exact equivalence class named in the audit
+// request — 05XXXXXXXX / +9725XXXXXXXX / 9725XXXXXXXX / spaces /
+// hyphens must all normalize to the SAME value for the SAME number.
+test("normalizePhone: 05XXXXXXXX, +9725XXXXXXXX, 9725XXXXXXXX, spaced and hyphenated forms all normalize identically", () => {
+  const forms = [
+    "0521234567",
+    "+972521234567",
+    "972521234567",
+    "+972 52 123 4567",
+    "052-123-4567",
+    "052 123 4567",
+    "+972-52-123-4567",
+  ];
+  const normalized = forms.map((f) => normalizePhone(f));
+  for (const n of normalized) assert.equal(n, "972521234567");
+});
+
+test("normalizePhone: does not merge two genuinely different Israeli numbers", () => {
+  assert.notEqual(normalizePhone("0521234567"), normalizePhone("0529999999"));
+});
+
+test("normalizePhone: does not merge two genuinely different non-Israeli international numbers", () => {
+  assert.notEqual(normalizePhone("+1 415 555 0132"), normalizePhone("+44 20 7946 0958"));
+  assert.equal(normalizePhone("+44 20 7946 0958"), "442079460958");
+});
+
 test("normalizeEmail: trims and lowercases", () => {
   assert.equal(normalizeEmail("  Someone@Example.com "), "someone@example.com");
+});
+
+test("normalizeEmail: performs no provider-specific rewriting (e.g. no Gmail dot/plus stripping)", () => {
+  // Deliberately conservative: 'a.b@gmail.com' and 'ab@gmail.com' are
+  // the same Gmail inbox in reality, but this normalizer must NOT
+  // encode that provider-specific knowledge — doing so risks merging
+  // two different real contacts on a guess. trim+lowercase only.
+  assert.equal(normalizeEmail("a.b@gmail.com"), "a.b@gmail.com");
+  assert.notEqual(normalizeEmail("a.b@gmail.com"), normalizeEmail("ab@gmail.com"));
+  assert.equal(normalizeEmail("user+tag@example.com"), "user+tag@example.com");
 });
 
 test("normalizeEmail: rejects malformed input", () => {

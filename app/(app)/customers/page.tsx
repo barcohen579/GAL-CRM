@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
+import { AddCustomerDialog } from "@/components/customers/add-customer-dialog";
 import {
   SERVICE_TYPE_LABELS,
   PURCHASE_STATUS_TONE,
@@ -40,7 +41,8 @@ export default async function CustomersPage() {
     <div>
       <PageHeader
         title="לקוחות"
-        description="כל מי שהפכה ללקוחה משלמת — נוצר אוטומטית כשליד נסגר."
+        description="כל מי שהפכה ללקוחה משלמת — נוצר אוטומטית כשליד נסגר, או ידנית ללקוחות קיימות."
+        action={<AddCustomerDialog />}
       />
 
       {error && (
@@ -53,7 +55,8 @@ export default async function CustomersPage() {
         <EmptyState
           icon={UserRound}
           title="עדיין אין לקוחות"
-          description="לקוחות יופיעו כאן אוטומטית ברגע שליד יסומן כ'נסגרה' — אין צורך להגדיר כלום."
+          description="לקוחות יופיעו כאן אוטומטית ברגע שליד יסומן כ'נסגרה' — או שאפשר להוסיף לקוחה קיימת ידנית."
+          action={<AddCustomerDialog />}
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">

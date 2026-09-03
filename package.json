@@ -11,7 +11,8 @@
     "meta:sync": "node scripts/meta-sync.mjs",
     "meta:reprocess-lead": "node scripts/meta-reprocess-lead.ts",
     "meta:webhook-demo": "node scripts/meta-webhook-mock-demo.ts",
-    "db:test:delete-lead": "supabase db query --linked -f supabase/tests/delete_lead_safely.test.sql"
+    "db:test:delete-lead": "supabase db query --linked -f supabase/tests/delete_lead_safely.test.sql",
+    "db:test:create-customer": "supabase db query --linked -f supabase/tests/create_customer_directly.test.sql"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

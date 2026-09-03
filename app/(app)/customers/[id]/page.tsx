@@ -31,10 +31,13 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function CustomerDetailsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ created?: string }>;
 }) {
   const { id } = await params;
+  const { created } = await searchParams;
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -87,6 +90,12 @@ export default async function CustomerDetailsPage({
         <ArrowRight className="h-3.5 w-3.5" />
         חזרה ללקוחות
       </Link>
+
+      {created === "1" && (
+        <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          הלקוחה נוספה בהצלחה.
+        </p>
+      )}
 
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">

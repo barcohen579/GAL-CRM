@@ -42,7 +42,13 @@ export default async function LeadDetailsPage({
     .select(
       `id, stage, stage_changed_at, lost_reason, created_at, updated_at,
        interested_services:lead_interested_services(service_type),
-       contact:contacts(id, full_name, phone, email, instagram_username, notes),
+       contact:contacts(
+         id, full_name, phone, email, instagram_username, notes,
+         referral:referrals(
+           referrer_customer_id,
+           referrer:customers(id, contact:contacts(full_name))
+         )
+       ),
        touchpoints(id, channel, certainty, source_detail, is_primary, occurred_at, created_at),
        follow_up_tasks(id, title, notes, due_at, status, completed_at, completed_note, source, created_at, updated_at),
        stage_events:lead_stage_events(id, from_stage, to_stage, changed_at, note)`
@@ -114,6 +120,20 @@ export default async function LeadDetailsPage({
               <Field label="שינוי שלב אחרון">
                 {formatDateTime(lead.stage_changed_at)}
               </Field>
+              {lead.contact.referral && (
+                <Field label="הופנתה על ידי">
+                  {lead.contact.referral.referrer ? (
+                    <Link
+                      href={`/customers/${lead.contact.referral.referrer.id}`}
+                      className="text-rose-600 hover:underline"
+                    >
+                      {lead.contact.referral.referrer.contact?.full_name ?? "לקוחה"}
+                    </Link>
+                  ) : (
+                    "הפניה (לא ידוע על ידי מי)"
+                  )}
+                </Field>
+              )}
               {lead.contact.phone && (
                 <Field label="טלפון">
                   <span dir="ltr" className="flex items-center gap-1.5">

@@ -17,9 +17,39 @@ export type ContactSummary = {
   instagram_username: string | null;
 };
 
+export type ContactSummaryWithReferral = ContactSummary & {
+  referral: ReferralInfo | null;
+};
+
+// One row in a referrer's "הפניות" list — who they referred, and
+// whether that person is currently a Lead, a Customer, both, or
+// neither yet (nothing prevents a referred person from having an open
+// Lead AND already being a Customer from an earlier, separate deal —
+// V1 shows both when present rather than picking one arbitrarily).
+export type ReferralMade = {
+  id: string;
+  created_at: string;
+  referred_contact: {
+    id: string;
+    full_name: string;
+    leads: { id: string; stage: LeadStage }[];
+    customers: { id: string; status: string } | null;
+  } | null;
+};
+
 // A lead may be interested in zero, one, or several services at once
 // (public.lead_interested_services) — never a single nullable value.
 export type InterestedService = { service_type: ServiceType };
+
+// "הופנתה על ידי" — present only when this Contact has a referrals row
+// (public.referrals; referred_contact_id is UNIQUE, so at most one).
+// referrer is null when referrer_customer_id itself is null (an
+// unknown/historical referral) or the referrer's Customer row was
+// later removed (ON DELETE SET NULL).
+export type ReferralInfo = {
+  referrer_customer_id: string | null;
+  referrer: { id: string; contact: { full_name: string } | null } | null;
+};
 
 export type LeadWithRelations = {
   id: string;
@@ -119,7 +149,7 @@ export type LeadDetail = {
   lost_reason: LeadLostReason | null;
   created_at: string;
   updated_at: string;
-  contact: ContactSummary & { notes: string | null };
+  contact: ContactSummaryWithReferral & { notes: string | null };
   touchpoints: TouchpointDetail[];
   follow_up_tasks: FollowUpTask[];
   stage_events: StageEvent[];
@@ -130,7 +160,7 @@ export type CustomerDetail = {
   id: string;
   customer_since: string;
   status: string;
-  contact: ContactSummary & { notes: string | null };
+  contact: ContactSummaryWithReferral & { notes: string | null };
   purchases: (PurchaseSummary & {
     start_date: string;
     notes: string | null;
@@ -138,6 +168,11 @@ export type CustomerDetail = {
     payments: PaymentWithRelations[];
   })[];
   follow_up_tasks: FollowUpTask[];
+  // Referrals THIS customer made (referrer_customer_id = this
+  // customer). Only populated on /customers/[id] — a lead never has
+  // this list, and it isn't fetched from the /customers/[id] query
+  // itself (see below), so it's added separately on that page.
+  referralsMade?: ReferralMade[];
 };
 
 export type TimelineEventType =

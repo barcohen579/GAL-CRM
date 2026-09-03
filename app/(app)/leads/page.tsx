@@ -20,18 +20,32 @@ export default async function LeadsPage({
   const { deleted } = await searchParams;
   const supabase = await createClient();
 
-  const { data, error } = await supabase
-    .from("leads")
-    .select(
-      `id, stage, created_at,
-       interested_services:lead_interested_services(service_type),
-       contact:contacts(id, full_name, phone, email, instagram_username),
-       touchpoints(channel, is_primary),
-       follow_up_tasks(id, due_at, status)`
-    )
-    .order("created_at", { ascending: false });
+  const [{ data, error }, { data: customersData }] = await Promise.all([
+    supabase
+      .from("leads")
+      .select(
+        `id, stage, created_at,
+         interested_services:lead_interested_services(service_type),
+         contact:contacts(id, full_name, phone, email, instagram_username),
+         touchpoints(channel, is_primary),
+         follow_up_tasks(id, due_at, status)`
+      )
+      .order("created_at", { ascending: false }),
+    // For the "הופנתה על ידי" referrer picker (Add Lead, when source =
+    // REFERRAL) — kept to just the fields that selector needs.
+    supabase
+      .from("customers")
+      .select("id, contact:contacts(full_name, phone)")
+      .order("customer_since", { ascending: false }),
+  ]);
 
   const leads = (data ?? []) as unknown as LeadWithRelations[];
+  const customersForReferrer = (customersData ?? [])
+    .map((c) => {
+      const contact = c.contact as unknown as { full_name: string; phone: string | null } | null;
+      return contact ? { id: c.id, full_name: contact.full_name, phone: contact.phone } : null;
+    })
+    .filter((c): c is { id: string; full_name: string; phone: string | null } => c !== null);
 
   const byStage = Object.fromEntries(
     LEAD_STAGES.map((stage) => [
@@ -45,7 +59,7 @@ export default async function LeadsPage({
       <PageHeader
         title="לידים"
         description="כל פנייה, מהמגע הראשון ועד שנסגרה או לא נסגרה."
-        action={<AddLeadDialog />}
+        action={<AddLeadDialog customers={customersForReferrer} />}
       />
 
       {error && (
@@ -65,7 +79,7 @@ export default async function LeadsPage({
           icon={Users}
           title="עדיין אין לידים"
           description="הוסיפי את הליד הראשון כדי להתחיל לבנות את הפייפליין."
-          action={<AddLeadDialog />}
+          action={<AddLeadDialog customers={customersForReferrer} />}
         />
       ) : (
         <div className="flex gap-4 overflow-x-auto pb-4">

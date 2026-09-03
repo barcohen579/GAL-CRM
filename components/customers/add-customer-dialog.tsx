@@ -7,10 +7,16 @@ import {
   type CreateCustomerState,
 } from "@/app/(app)/customers/actions";
 import {
+  CustomerSearchSelect,
+  type CustomerSearchOption,
+} from "@/components/customers/customer-search-select";
+import {
   SERVICE_TYPES,
   SERVICE_TYPE_LABELS,
   PAYMENT_METHODS,
   PAYMENT_METHOD_LABELS,
+  TOUCHPOINT_CHANNELS,
+  TOUCHPOINT_CHANNEL_LABELS,
 } from "@/lib/crm/constants";
 
 const initialState: CreateCustomerState = { error: null };
@@ -34,7 +40,11 @@ function todayIso() {
 // (existing, real customers Gal is backfilling into the CRM), not a
 // lead who converted. Deliberately never creates a Lead or a
 // Touchpoint — see app/(app)/customers/actions.ts.
-export function AddCustomerDialog() {
+export function AddCustomerDialog({
+  customers = [],
+}: {
+  customers?: CustomerSearchOption[];
+}) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const [state, formAction, isPending] = useActionState(
@@ -43,6 +53,7 @@ export function AddCustomerDialog() {
   );
   const [serviceType, setServiceType] = useState("");
   const [recordPayment, setRecordPayment] = useState(false);
+  const [source, setSource] = useState("");
 
   // No "on success" effect needed here (unlike e.g. WonConversionDialog):
   // a successful submission redirects server-side (see the action),
@@ -66,6 +77,7 @@ export function AddCustomerDialog() {
           formRef.current?.reset();
           setServiceType("");
           setRecordPayment(false);
+          setSource("");
         }}
         className="w-full max-w-lg rounded-2xl border border-zinc-200 p-0 text-right shadow-xl backdrop:bg-zinc-900/40"
       >
@@ -73,7 +85,7 @@ export function AddCustomerDialog() {
           <div>
             <h2 className="text-sm font-semibold text-zinc-900">הוספת לקוחה</h2>
             <p className="mt-0.5 text-xs text-zinc-500">
-              ללקוחה קיימת — לא יוצר ליד ולא ייחוס שיווקי.
+              ללקוחה קיימת — לא יוצר ליד.
             </p>
           </div>
           <button
@@ -145,6 +157,41 @@ export function AddCustomerDialog() {
                 placeholder="shira.c (לא חובה)"
               />
             </div>
+
+            <div className="sm:col-span-2 space-y-1">
+              <label htmlFor="cust_source" className={labelClass}>
+                מקור הגעה
+              </label>
+              <select
+                id="cust_source"
+                name="source"
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+                className={inputClass}
+              >
+                <option value="">לא ידוע / לא רלוונטי</option>
+                {TOUCHPOINT_CHANNELS.filter((c) => c !== "UNKNOWN").map((c) => (
+                  <option key={c} value={c}>
+                    {TOUCHPOINT_CHANNEL_LABELS[c]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {source === "REFERRAL" && (
+              <div className="sm:col-span-2 space-y-1">
+                <label htmlFor="cust_referrer_customer_id" className={labelClass}>
+                  הופנתה על ידי
+                </label>
+                <CustomerSearchSelect
+                  name="referrer_customer_id"
+                  customers={customers}
+                />
+                <p className="text-[11px] text-zinc-400">
+                  מומלץ לבחור לקוחה קיימת, אך אפשר גם להשאיר ריק אם לא ידוע.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="mt-5 border-t border-zinc-100 pt-4">

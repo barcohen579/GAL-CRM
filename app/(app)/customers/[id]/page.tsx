@@ -21,8 +21,10 @@ import {
   RECURRENCE_LABELS,
 } from "@/lib/crm/constants";
 import { formatDate, formatDateTime, formatMoney } from "@/lib/crm/format";
-import { CalendarClock, Wallet } from "lucide-react";
-import type { CustomerDetail } from "@/lib/crm/types";
+import { CalendarClock, Wallet, Users } from "lucide-react";
+import { LEAD_STAGE_LABELS, LEAD_STAGE_TONE } from "@/lib/crm/constants";
+import { computeReferralMetrics } from "@/lib/crm/referrals";
+import type { CustomerDetail, ReferralMade } from "@/lib/crm/types";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +47,12 @@ export default async function CustomerDetailsPage({
     .from("customers")
     .select(
       `id, customer_since, status,
-       contact:contacts(id, full_name, phone, email, instagram_username, notes),
+       contact:contacts(id, full_name, phone, email, instagram_username, notes,
+         referral:referrals(
+           referrer_customer_id,
+           referrer:customers(id, contact:contacts(full_name))
+         )
+       ),
        purchases(id, service_type, custom_service_name, status, recurrence, agreed_price_amount, agreed_price_currency, start_date, notes, lead_id,
          payments(id, amount, currency, paid_at, method, status, notes, created_at)),
        follow_up_tasks(id, title, notes, due_at, status, completed_at, completed_note, source, created_at, updated_at)`
@@ -58,6 +65,45 @@ export default async function CustomerDetailsPage({
   }
 
   const customer = data as unknown as CustomerDetail;
+
+  // "הפניות" — people THIS customer referred (referrer_customer_id = this
+  // customer's id). Separate query: not part of the row above, and only
+  // ever needed on the referrer's own page.
+  const { data: referralsMadeData } = await supabase
+    .from("referrals")
+    .select(
+      `id, created_at,
+       referred_contact:contacts(
+         id, full_name,
+         leads(id, stage),
+         customers(id, status)
+       )`
+    )
+    .eq("referrer_customer_id", customer.id)
+    .order("created_at", { ascending: false });
+
+  const referralsMade = (referralsMadeData ?? []) as unknown as ReferralMade[];
+
+  const referredCustomerIds = referralsMade
+    .map((r) => r.referred_contact?.customers?.id)
+    .filter((cid): cid is string => Boolean(cid));
+
+  // Revenue from people this customer referred — direct only (their own
+  // paid payments), never recursive through further referrals of theirs.
+  // Deliberately not framed as LTV: just what's been paid so far. The
+  // aggregation itself (computeReferralMetrics) is a pure, unit-tested
+  // function — this query only scopes purchases to the referred
+  // customers, mirroring lib/crm/marketing.ts's fetch/compute split.
+  let referredPurchasesRows: { payments: { amount: number; status: string }[] }[] = [];
+  if (referredCustomerIds.length > 0) {
+    const { data: referredPurchases } = await supabase
+      .from("purchases")
+      .select("payments(amount, status)")
+      .in("customer_id", referredCustomerIds);
+    referredPurchasesRows = referredPurchases ?? [];
+  }
+
+  const referralMetrics = computeReferralMetrics(referralsMade, referredPurchasesRows);
 
   const allPurchasesSimplified = customer.purchases.map((p) => ({
     id: p.id,
@@ -148,6 +194,23 @@ export default async function CustomerDetailsPage({
                   <p className="mt-0.5 flex items-center gap-1.5 text-sm text-zinc-800" dir="ltr">
                     <AtSign className="h-3.5 w-3.5 text-zinc-400" />
                     {customer.contact.instagram_username}
+                  </p>
+                </div>
+              )}
+              {customer.contact.referral && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-500">הופנתה על ידי</p>
+                  <p className="mt-0.5 text-sm text-zinc-800">
+                    {customer.contact.referral.referrer ? (
+                      <Link
+                        href={`/customers/${customer.contact.referral.referrer.id}`}
+                        className="text-rose-600 hover:underline"
+                      >
+                        {customer.contact.referral.referrer.contact?.full_name ?? "לקוחה"}
+                      </Link>
+                    ) : (
+                      "הפניה (לא ידוע על ידי מי)"
+                    )}
                   </p>
                 </div>
               )}
@@ -289,6 +352,51 @@ export default async function CustomerDetailsPage({
               </ul>
             )}
           </Card>
+
+          {referralsMade.length > 0 && (
+            <Card className="mt-6">
+              <CardHeader
+                title="הפניות"
+                description={`${referralMetrics.referredCount} הופנו · ${referralMetrics.becameCustomerCount} הפכו ללקוחות · הכנסות מלקוחות שהופנו: ${formatMoney(referralMetrics.revenueMinor)}`}
+              />
+              <ul className="divide-y divide-zinc-100">
+                {referralsMade.map((r) => {
+                  const contact = r.referred_contact;
+                  if (!contact) return null;
+                  const lead = contact.leads[0];
+                  const isCustomer = Boolean(contact.customers);
+                  return (
+                    <li key={r.id} className="flex items-center justify-between gap-3 px-5 py-3">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Users className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                        <Link
+                          href={
+                            isCustomer && contact.customers
+                              ? `/customers/${contact.customers.id}`
+                              : lead
+                                ? `/leads/${lead.id}`
+                                : "#"
+                          }
+                          className="truncate text-sm font-medium text-zinc-900 hover:text-rose-600 hover:underline"
+                        >
+                          {contact.full_name}
+                        </Link>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {isCustomer && <Badge tone="success">לקוחה</Badge>}
+                        {lead && !isCustomer && (
+                          <Badge tone={LEAD_STAGE_TONE[lead.stage]}>
+                            {LEAD_STAGE_LABELS[lead.stage]}
+                          </Badge>
+                        )}
+                        {!lead && !isCustomer && <Badge tone="neutral">איש קשר</Badge>}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </Card>
+          )}
         </div>
       </div>
     </div>

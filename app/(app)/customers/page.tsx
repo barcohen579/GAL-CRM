@@ -36,13 +36,18 @@ export default async function CustomersPage() {
     .order("customer_since", { ascending: false });
 
   const customers = (data ?? []) as unknown as CustomerRow[];
+  // Reuses the same already-loaded list for the "הופנתה על ידי"
+  // referrer picker — no separate query needed.
+  const customersForReferrer = customers
+    .filter((c) => c.contact)
+    .map((c) => ({ id: c.id, full_name: c.contact!.full_name, phone: c.contact!.phone }));
 
   return (
     <div>
       <PageHeader
         title="לקוחות"
         description="כל מי שהפכה ללקוחה משלמת — נוצר אוטומטית כשליד נסגר, או ידנית ללקוחות קיימות."
-        action={<AddCustomerDialog />}
+        action={<AddCustomerDialog customers={customersForReferrer} />}
       />
 
       {error && (
@@ -56,7 +61,7 @@ export default async function CustomersPage() {
           icon={UserRound}
           title="עדיין אין לקוחות"
           description="לקוחות יופיעו כאן אוטומטית ברגע שליד יסומן כ'נסגרה' — או שאפשר להוסיף לקוחה קיימת ידנית."
-          action={<AddCustomerDialog />}
+          action={<AddCustomerDialog customers={customersForReferrer} />}
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">

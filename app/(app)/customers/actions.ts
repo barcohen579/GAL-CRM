@@ -43,6 +43,20 @@ export async function createCustomerDirectly(
   const email = optionalString(formData.get("email"));
   const instagramUsername = optionalString(formData.get("instagram_username"));
 
+  // "מקור הגעה" — for this direct (leadless) flow, only meaningfully
+  // persisted when it's REFERRAL: touchpoints.lead_id is NOT NULL in
+  // this schema (every touchpoint belongs to a Lead), and this
+  // customer deliberately has none, so there is nowhere to store any
+  // OTHER channel value without either inventing a fake Lead (which
+  // this whole flow exists to avoid) or a broader touchpoints schema
+  // change unrelated to what this feature actually needs. The
+  // selector still offers the full channel vocabulary (for
+  // consistency with Add Lead), but only source === "REFERRAL" has a
+  // stored effect right now — see public.referrals.
+  const source = optionalString(formData.get("source"));
+  const referrerCustomerId =
+    source === "REFERRAL" ? optionalString(formData.get("referrer_customer_id")) : null;
+
   const serviceType = optionalString(formData.get("service_type"));
   if (!serviceType) {
     return { error: "יש לבחור שירות." };
@@ -135,6 +149,7 @@ export async function createCustomerDirectly(
       p_payment_paid_at: paymentPaidAt,
       p_payment_method: paymentMethod,
       p_payment_notes: paymentNotes,
+      p_referrer_customer_id: referrerCustomerId,
     })
     .single();
 

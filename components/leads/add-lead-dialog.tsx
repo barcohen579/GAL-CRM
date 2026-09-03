@@ -1,8 +1,12 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { createLead, type CreateLeadState } from "@/app/(app)/leads/actions";
+import {
+  CustomerSearchSelect,
+  type CustomerSearchOption,
+} from "@/components/customers/customer-search-select";
 import {
   SERVICE_TYPES,
   SERVICE_TYPE_LABELS,
@@ -20,17 +24,23 @@ const inputClass =
 const ltrInputClass = `${inputClass} text-left`;
 const labelClass = "text-xs font-medium text-zinc-700";
 
-export function AddLeadDialog() {
+export function AddLeadDialog({
+  customers = [],
+}: {
+  customers?: CustomerSearchOption[];
+}) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const [state, formAction, isPending] = useActionState(
     createLead,
     initialState
   );
+  const [channel, setChannel] = useState("");
 
   useEffect(() => {
     if (state.success) {
-      formRef.current?.reset();
+      // Closing triggers the dialog's onClose below, which resets both
+      // the form and the `channel` state — no need to duplicate that here.
       dialogRef.current?.close();
     }
   }, [state.success]);
@@ -48,7 +58,10 @@ export function AddLeadDialog() {
 
       <dialog
         ref={dialogRef}
-        onClose={() => formRef.current?.reset()}
+        onClose={() => {
+          formRef.current?.reset();
+          setChannel("");
+        }}
         className="w-full max-w-lg rounded-2xl border border-zinc-200 p-0 text-right shadow-xl backdrop:bg-zinc-900/40 open:animate-in"
       >
         <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-4">
@@ -149,7 +162,8 @@ export function AddLeadDialog() {
               <select
                 id="channel"
                 name="channel"
-                defaultValue=""
+                value={channel}
+                onChange={(e) => setChannel(e.target.value)}
                 className={inputClass}
               >
                 <option value="">לא ידוע / לא בטוחה</option>
@@ -160,6 +174,21 @@ export function AddLeadDialog() {
                 ))}
               </select>
             </div>
+
+            {channel === "REFERRAL" && (
+              <div className="sm:col-span-2 space-y-1">
+                <label htmlFor="referrer_customer_id" className={labelClass}>
+                  הופנתה על ידי
+                </label>
+                <CustomerSearchSelect
+                  name="referrer_customer_id"
+                  customers={customers}
+                />
+                <p className="text-[11px] text-zinc-400">
+                  מומלץ לבחור לקוחה קיימת, אך אפשר גם להשאיר ריק אם לא ידוע.
+                </p>
+              </div>
+            )}
 
             <div className="sm:col-span-2 space-y-1">
               <label htmlFor="follow_up_at" className={labelClass}>

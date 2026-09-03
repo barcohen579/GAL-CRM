@@ -35,6 +35,7 @@ export async function createLead(
     .getAll("interested_services")
     .filter((v): v is string => typeof v === "string" && v.length > 0);
   const channel = optionalString(formData.get("channel"));
+  const referrerCustomerId = optionalString(formData.get("referrer_customer_id"));
   const notes = optionalString(formData.get("notes"));
   const followUpAt = optionalString(formData.get("follow_up_at"));
 
@@ -103,6 +104,22 @@ export async function createLead(
       });
     if (touchpointError) {
       console.error("createLead: touchpoint insert failed:", touchpointError.message);
+    }
+  }
+
+  // Referral ("הופנתה על ידי"): recorded against the Contact, not the
+  // Lead — see public.referrals and its own migration for why (the
+  // relationship must survive WON conversion unchanged, which it does
+  // automatically by never referencing lead_id at all). Self-referral
+  // is structurally impossible here: createLead always makes a brand
+  // new Contact (no matching against existing contacts happens in this
+  // flow), so it can never coincide with an existing customer.
+  if (channel === "REFERRAL" && referrerCustomerId) {
+    const { error: referralError } = await supabase
+      .from("referrals")
+      .insert({ referred_contact_id: contact.id, referrer_customer_id: referrerCustomerId });
+    if (referralError) {
+      console.error("createLead: referral insert failed:", referralError.message);
     }
   }
 

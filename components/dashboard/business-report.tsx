@@ -1,43 +1,21 @@
-import Link from "next/link";
-import {
-  Wallet,
-  Megaphone,
-  Receipt,
-  Calculator,
-  TrendingUp,
-  UserPlus,
-  UserCheck,
-  Trophy,
-  Percent,
-  Target,
-  BadgeCheck,
-  Coins,
-  Users,
-} from "lucide-react";
+import { Wallet, Megaphone, Receipt, Calculator, TrendingUp, Target, Users } from "lucide-react";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { MonthSelector } from "./month-selector";
 import { ExpenseList, type BusinessExpenseRow } from "./expense-list";
 import { formatMoney } from "@/lib/crm/format";
-import {
-  SERVICE_TYPE_LABELS,
-  TOUCHPOINT_CHANNEL_LABELS,
-} from "@/lib/crm/constants";
-import type { SelectedMonth } from "@/lib/crm/date-range";
+import { SERVICE_TYPE_LABELS, TOUCHPOINT_CHANNEL_LABELS } from "@/lib/crm/constants";
 import type { MonthOverMonthChange } from "@/lib/crm/marketing";
-import type {
-  ServiceRevenueRow,
-  MonthlySalesFunnel,
-  MonthlyReferralMetrics,
-} from "@/lib/crm/business-report";
+import type { ServiceRevenueRow, MonthlyReferralMetrics } from "@/lib/crm/business-report";
 import type { TouchpointChannel } from "@/lib/crm/constants";
 
-function formatRatio(ratio: number | null): string {
+// Shared presentational building blocks — also used by
+// monthly-marketing-kpis.tsx, so exported rather than duplicated.
+export function formatRatio(ratio: number | null): string {
   if (ratio === null) return "—";
   return `×${ratio.toFixed(2)}`;
 }
 
-function ChangeBadge({ change }: { change: MonthOverMonthChange }) {
+export function ChangeBadge({ change }: { change: MonthOverMonthChange }) {
   if (change === null) return null;
   const sign = change.direction === "up" ? "↑" : change.direction === "down" ? "↓" : "";
   return (
@@ -47,7 +25,7 @@ function ChangeBadge({ change }: { change: MonthOverMonthChange }) {
   );
 }
 
-function KpiCard({
+export function KpiCard({
   icon: Icon,
   label,
   value,
@@ -89,10 +67,17 @@ function KpiCard({
   );
 }
 
-export type BusinessReportData = {
-  selectedMonth: SelectedMonth;
-
-  // Top KPIs — revenue / expenses / profit.
+// The financial/business-summary section — revenue, Meta spend,
+// business expenses, total expenses, estimated profit, revenue by
+// service, lead sources, referral revenue, and the expense list.
+// Deliberately placed toward the END of /dashboard (see page.tsx) —
+// leads/sales/marketing performance keep their pre-existing position
+// near the top; this is the newer, deeper financial drill-down for the
+// selected month, not the page's headline. The sales-funnel KPIs
+// (new leads/new customers/WON/conversion) and the Meta-specific KPI
+// grid (see monthly-marketing-kpis.tsx) live elsewhere on the page —
+// this component covers only what's genuinely new-and-financial.
+export type FinancialSummaryData = {
   revenueMinor: number;
   metaSpendMinor: number | null;
   otherExpensesMinor: number;
@@ -104,47 +89,21 @@ export type BusinessReportData = {
     otherExpenses: MonthOverMonthChange;
     totalExpenses: MonthOverMonthChange;
     estimatedProfit: MonthOverMonthChange;
-    newLeads: MonthOverMonthChange;
-    won: MonthOverMonthChange;
   };
-
-  // Sales funnel.
-  salesFunnel: MonthlySalesFunnel;
-
-  // Marketing KPIs.
-  confirmedMetaLeadsCount: number;
-  broadMetaLeadsCount: number;
-  metaAttributedLeadsCount: number;
-  primaryCplMinor: number | null;
-  confirmedMetaRevenueMinor: number;
-  confirmedMetaRoas: number | null;
-  confirmedMetaLeadsExistOverall: boolean;
-  metaAttributedWonCount: number;
-
   revenueByService: ServiceRevenueRow[];
   leadSources: Record<TouchpointChannel, number>;
   referralMetrics: MonthlyReferralMetrics;
   expenses: BusinessExpenseRow[];
 };
 
-export function BusinessReport({ data }: { data: BusinessReportData }) {
+export function FinancialSummary({ data }: { data: FinancialSummaryData }) {
   const {
-    selectedMonth,
     revenueMinor,
     metaSpendMinor,
     otherExpensesMinor,
     totalExpensesMinor,
     estimatedProfitMinor,
     changeVsPreviousMonth: chg,
-    salesFunnel,
-    confirmedMetaLeadsCount,
-    broadMetaLeadsCount,
-    metaAttributedLeadsCount,
-    primaryCplMinor,
-    confirmedMetaRevenueMinor,
-    confirmedMetaRoas,
-    confirmedMetaLeadsExistOverall,
-    metaAttributedWonCount,
     revenueByService,
     leadSources,
     referralMetrics,
@@ -157,16 +116,13 @@ export function BusinessReport({ data }: { data: BusinessReportData }) {
 
   return (
     <div>
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight text-zinc-900">
-            דוח עסקי חודשי
-          </h2>
-          <p className="mt-0.5 text-xs text-zinc-500">
-            התמונה המלאה של החודש הנבחר — הכנסות, הוצאות, לידים ושיווק.
-          </p>
-        </div>
-        <MonthSelector selectedMonth={selectedMonth} />
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold tracking-tight text-zinc-900">
+          הכנסות, הוצאות ורווח
+        </h2>
+        <p className="mt-0.5 text-xs text-zinc-500">
+          הפירוט הכספי המלא של החודש הנבחר — כולל הוצאות שנרשמו ידנית.
+        </p>
       </div>
 
       {/* ---- Revenue / expenses / profit ---- */}
@@ -209,87 +165,6 @@ export function BusinessReport({ data }: { data: BusinessReportData }) {
           unavailableText="תלוי בסה״כ הוצאות"
           hint="הכנסות פחות סה״כ הוצאות — מדד ניהולי, לא רווח חשבונאי (לא כולל מע״מ/מס הכנסה/ביטוח לאומי/פחת)"
         />
-      </div>
-
-      {/* ---- Sales funnel ---- */}
-      <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <KpiCard
-          icon={UserPlus}
-          label="לידים חדשים"
-          value={String(salesFunnel.newLeadsCount)}
-          change={chg.newLeads}
-          hint="לידים שנוצרו בחודש זה"
-        />
-        <KpiCard
-          icon={UserCheck}
-          label="לקוחות חדשות"
-          value={String(salesFunnel.newCustomersCount)}
-          hint="לקוחות מאז בחודש זה — כולל לקוחות ישירות ללא ליד"
-        />
-        <KpiCard
-          icon={Trophy}
-          label="לידים שנסגרו (WON)"
-          value={String(salesFunnel.wonCount)}
-          change={chg.won}
-          hint="מעבר לשלב נסגרה בחודש זה"
-        />
-        <KpiCard
-          icon={Percent}
-          label="אחוז סגירה"
-          value={
-            salesFunnel.conversionRatePercent === null
-              ? null
-              : `${salesFunnel.conversionRatePercent.toFixed(0)}%`
-          }
-          unavailableText="עדיין לא הוכרע אף ליד החודש"
-          hint={`מתוך לידים שהוכרעו החודש (${salesFunnel.wonCount} נסגרו / ${
-            salesFunnel.wonCount + salesFunnel.lostCount
-          } הוכרעו) — לא מתוך הלידים החדשים החודש`}
-        />
-      </div>
-
-      {/* ---- Marketing KPIs ---- */}
-      <div className="mt-6">
-        <h3 className="mb-3 text-sm font-semibold text-zinc-900">שיווק — מטא</h3>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <KpiCard
-            icon={BadgeCheck}
-            label="לידים מאומתים ממטא"
-            value={String(confirmedMetaLeadsCount)}
-            hint="ייחוס ודאי (CONFIRMED)"
-          />
-          <KpiCard
-            icon={Target}
-            label="לידים משויכים למטא (רחב)"
-            value={String(metaAttributedLeadsCount)}
-            hint={`כולל ${broadMetaLeadsCount} לא ודאיים`}
-          />
-          <KpiCard
-            icon={TrendingUp}
-            label="עלות לליד מאומת (CPL)"
-            value={primaryCplMinor === null ? null : formatMoney(primaryCplMinor)}
-            unavailableText="אין לידים מאומתים ממטא החודש"
-          />
-          <KpiCard
-            icon={Trophy}
-            label="WON משויכים למטא"
-            value={String(metaAttributedWonCount)}
-            hint="לידים עם ייחוס מאומת שנסגרו החודש"
-          />
-          <KpiCard
-            icon={Coins}
-            label="הכנסה מאומתת ממטא"
-            value={formatMoney(confirmedMetaRevenueMinor)}
-            hint="תשלומים בחודש זה מלידים עם ייחוס מאומת"
-          />
-          <KpiCard
-            icon={TrendingUp}
-            label="ROAS מאומת ממטא"
-            value={confirmedMetaLeadsExistOverall ? formatRatio(confirmedMetaRoas) : null}
-            unavailableText="עדיין לא ניתן למדידה אמינה"
-            hint='לא לבלבל עם יחס הכנסות כלליות מול הוצאת מטא — זהו ROAS על הכנסה מאומתת בלבד'
-          />
-        </div>
       </div>
 
       {/* ---- Revenue by service + lead sources ---- */}
@@ -403,13 +278,6 @@ export function BusinessReport({ data }: { data: BusinessReportData }) {
 
         <ExpenseList expenses={expenses} totalMinor={otherExpensesMinor} />
       </div>
-
-      <Link
-        href="#marketing"
-        className="mt-6 inline-block text-xs font-medium text-rose-600 hover:text-rose-700"
-      >
-        לביצועי שיווק גמישים לפי טווח ולפי קמפיין ↓
-      </Link>
     </div>
   );
 }

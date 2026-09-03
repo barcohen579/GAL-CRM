@@ -4,7 +4,10 @@ import {
   UserPlus,
   Clock,
   Dumbbell,
+  Trophy,
   Wallet,
+  Percent,
+  UserCheck,
   ArrowLeft,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
@@ -18,7 +21,9 @@ import {
   type MarketingPerformanceData,
 } from "@/components/dashboard/marketing-performance";
 import { MonthlyPerformance } from "@/components/dashboard/monthly-performance";
-import { BusinessReport, type BusinessReportData } from "@/components/dashboard/business-report";
+import { FinancialSummary, type FinancialSummaryData } from "@/components/dashboard/business-report";
+import { MonthlyMarketingKpis } from "@/components/dashboard/monthly-marketing-kpis";
+import { MonthSelector } from "@/components/dashboard/month-selector";
 import {
   LEAD_STAGE_LABELS,
   LEAD_STAGE_TONE,
@@ -436,27 +441,17 @@ export default async function DashboardPage({
     monthKeyOf,
   });
 
-  const businessReportData: BusinessReportData = {
-    selectedMonth,
+  const financialSummaryData: FinancialSummaryData = {
     revenueMinor: selectedMonthRow.revenueMinor,
     metaSpendMinor: selectedMonthRow.metaSpendMinor,
     otherExpensesMinor: selectedMonthRow.otherExpensesMinor,
     totalExpensesMinor: selectedMonthRow.totalExpensesMinor,
     estimatedProfitMinor: selectedMonthRow.estimatedProfitMinor,
     changeVsPreviousMonth: selectedMonthRow.changeVsPreviousMonth,
-    salesFunnel,
-    confirmedMetaLeadsCount: selectedMonthRow.confirmedMetaLeadsCount,
-    broadMetaLeadsCount: selectedMonthRow.broadMetaLeadsCount,
-    metaAttributedLeadsCount: selectedMonthRow.metaAttributedLeadsCount,
-    primaryCplMinor: selectedMonthRow.primaryCplMinor,
-    confirmedMetaRevenueMinor: selectedMonthRow.confirmedMetaRevenueMinor,
-    confirmedMetaRoas: selectedMonthRow.confirmedMetaRoas,
-    confirmedMetaLeadsExistOverall,
-    metaAttributedWonCount,
     revenueByService,
     leadSources,
     referralMetrics,
-    expenses: (businessExpensesInMonthRes.data ?? []) as BusinessReportData["expenses"],
+    expenses: (businessExpensesInMonthRes.data ?? []) as FinancialSummaryData["expenses"],
   };
 
   const marketingData: MarketingPerformanceData = {
@@ -488,10 +483,16 @@ export default async function DashboardPage({
     <div>
       <PageHeader
         title="לוח בקרה"
-        description="דוח עסקי חודשי, מעקבים ותמונת מצב חיה."
+        description="תמונת מצב חיה של לידים, מעקבים והכנסות."
+        action={
+          <div className="flex flex-col items-end gap-1.5">
+            <span className="text-xs font-medium text-zinc-500">חודש להצגה</span>
+            <MonthSelector selectedMonth={selectedMonth} />
+          </div>
+        }
       />
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-7">
         <StatCard
           label="לידים חדשים (ממתינים)"
           value={String(newLeadsRes.count ?? 0)}
@@ -508,10 +509,36 @@ export default async function DashboardPage({
           value={String(trialsBookedRes.count ?? 0)}
           icon={Dumbbell}
         />
-      </div>
-
-      <div className="mt-8">
-        <BusinessReport data={businessReportData} />
+        <StatCard
+          label="לידים חדשים בחודש"
+          value={String(salesFunnel.newLeadsCount)}
+          icon={UserPlus}
+        />
+        <StatCard
+          label="לקוחות חדשות בחודש"
+          value={String(salesFunnel.newCustomersCount)}
+          icon={UserCheck}
+          hint="כולל לקוחות ישירות ללא ליד"
+        />
+        <StatCard
+          label="נסגרו (WON)"
+          value={String(salesFunnel.wonCount)}
+          icon={Trophy}
+        />
+        <StatCard
+          label="אחוז סגירה"
+          value={
+            salesFunnel.conversionRatePercent === null
+              ? "—"
+              : `${salesFunnel.conversionRatePercent.toFixed(0)}%`
+          }
+          icon={Percent}
+          hint={
+            salesFunnel.wonCount + salesFunnel.lostCount === 0
+              ? "עדיין לא הוכרע אף ליד בחודש זה"
+              : `${salesFunnel.wonCount} נסגרו מתוך ${salesFunnel.wonCount + salesFunnel.lostCount} שהוכרעו`
+          }
+        />
       </div>
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -703,9 +730,23 @@ export default async function DashboardPage({
         </Card>
       </div>
 
-      <div id="marketing">
+      <div id="marketing" className="mt-8">
+        <MonthlyMarketingKpis
+          confirmedMetaLeadsCount={selectedMonthRow.confirmedMetaLeadsCount}
+          broadMetaLeadsCount={selectedMonthRow.broadMetaLeadsCount}
+          metaAttributedLeadsCount={selectedMonthRow.metaAttributedLeadsCount}
+          primaryCplMinor={selectedMonthRow.primaryCplMinor}
+          metaAttributedWonCount={metaAttributedWonCount}
+          confirmedMetaRevenueMinor={selectedMonthRow.confirmedMetaRevenueMinor}
+          confirmedMetaRoas={selectedMonthRow.confirmedMetaRoas}
+          confirmedMetaLeadsExistOverall={confirmedMetaLeadsExistOverall}
+        />
         <MarketingPerformance data={marketingData} />
         <MonthlyPerformance months={monthlyMetrics} />
+      </div>
+
+      <div className="mt-8">
+        <FinancialSummary data={financialSummaryData} />
       </div>
     </div>
   );

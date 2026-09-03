@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "meta:sync": "node scripts/meta-sync.mjs"
+    "test": "node --test",
+    "meta:sync": "node scripts/meta-sync.mjs",
+    "meta:reprocess-lead": "node scripts/meta-reprocess-lead.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

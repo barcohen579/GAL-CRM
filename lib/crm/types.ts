@@ -17,10 +17,14 @@ export type ContactSummary = {
   instagram_username: string | null;
 };
 
+// A lead may be interested in zero, one, or several services at once
+// (public.lead_interested_services) — never a single nullable value.
+export type InterestedService = { service_type: ServiceType };
+
 export type LeadWithRelations = {
   id: string;
   stage: LeadStage;
-  interested_service: ServiceType | null;
+  interested_services: InterestedService[];
   created_at: string;
   contact: ContactSummary | null;
   touchpoints: { channel: TouchpointChannel; is_primary: boolean }[];
@@ -111,7 +115,7 @@ export type LeadDetail = {
   id: string;
   stage: LeadStage;
   stage_changed_at: string;
-  interested_service: ServiceType | null;
+  interested_services: InterestedService[];
   lost_reason: LeadLostReason | null;
   created_at: string;
   updated_at: string;

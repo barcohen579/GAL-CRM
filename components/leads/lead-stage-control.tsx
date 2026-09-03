@@ -11,6 +11,7 @@ import {
   LEAD_STAGE_LABELS,
   LEAD_STAGE_TONE,
   type LeadStage,
+  type ServiceType,
 } from "@/lib/crm/constants";
 
 // Compact, click-to-open stage switcher. Lives on both the kanban card
@@ -21,11 +22,13 @@ export function LeadStageControl({
   leadId,
   stage,
   contactName,
+  interestedServices,
   size = "sm",
 }: {
   leadId: string;
   stage: LeadStage;
   contactName: string;
+  interestedServices?: ServiceType[];
   size?: "sm" | "md";
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -118,7 +121,7 @@ export function LeadStageControl({
         ref={wonDialogRef}
         leadId={leadId}
         contactName={contactName}
-        onDone={() => wonDialogRef.current?.close()}
+        interestedServices={interestedServices}
       />
     </div>
   );

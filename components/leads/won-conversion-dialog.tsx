@@ -1,12 +1,12 @@
 "use client";
 
-import { forwardRef, useEffect, useRef, useState } from "react";
+import { forwardRef, useRef, useState } from "react";
 import { useActionState } from "react";
 import {
   convertLeadToWon,
   type ConvertToWonState,
 } from "@/app/(app)/leads/actions";
-import { SERVICE_TYPES, SERVICE_TYPE_LABELS } from "@/lib/crm/constants";
+import { SERVICE_TYPES, SERVICE_TYPE_LABELS, type ServiceType } from "@/lib/crm/constants";
 
 const initialState: ConvertToWonState = { error: null };
 
@@ -23,8 +23,15 @@ function todayIso() {
 
 export const WonConversionDialog = forwardRef<
   HTMLDialogElement,
-  { leadId: string; contactName: string; onDone: () => void }
->(function WonConversionDialog({ leadId, contactName, onDone }, ref) {
+  {
+    leadId: string;
+    contactName: string;
+    interestedServices?: ServiceType[];
+  }
+>(function WonConversionDialog(
+  { leadId, contactName, interestedServices = [] },
+  ref
+) {
   const formRef = useRef<HTMLFormElement>(null);
   const [state, formAction, isPending] = useActionState(
     convertLeadToWon,
@@ -32,22 +39,22 @@ export const WonConversionDialog = forwardRef<
   );
   const [serviceType, setServiceType] = useState("");
 
-  useEffect(() => {
-    if (state.success) {
-      formRef.current?.reset();
-      setServiceType("");
-      onDone();
-    }
-    // onDone is stable enough for this purpose (closes + revalidated data
-    // already refreshed the page) — intentionally not in deps to avoid
-    // re-running on every parent render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.success]);
+  // No "on success" handling here (unlike the old version, which had an
+  // onDone prop the parent used to close this dialog after a
+  // client-visible success state): a successful submission now
+  // redirects server-side, to the newly-converted customer's page —
+  // see the action — navigating away entirely before the client ever
+  // sees a normal return. onClose below only ever fires for an
+  // unsuccessful dismissal (Cancel / backdrop / Esc), where resetting
+  // local state is all that's needed.
 
   return (
     <dialog
       ref={ref}
-      onClose={() => formRef.current?.reset()}
+      onClose={() => {
+        formRef.current?.reset();
+        setServiceType("");
+      }}
       className="w-full max-w-lg rounded-2xl border border-zinc-200 p-0 text-right shadow-xl backdrop:bg-zinc-900/40"
     >
       <div className="border-b border-zinc-100 px-5 py-4">
@@ -57,6 +64,13 @@ export const WonConversionDialog = forwardRef<
         <p className="mt-1 text-xs text-zinc-500">
           פרטי העסקה ייצרו לקוחה (אם עוד אין) ורכישה חדשה.
         </p>
+        {interestedServices.length > 0 && (
+          <p className="mt-2 rounded-lg bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-600">
+            היא התעניינה ב: {interestedServices.map((s) => SERVICE_TYPE_LABELS[s]).join(", ")}
+            {" — "}
+            בחרי למטה מה בפועל נרכש (לא בהכרח הכול).
+          </p>
+        )}
       </div>
 
       <form ref={formRef} action={formAction} className="px-5 py-4">

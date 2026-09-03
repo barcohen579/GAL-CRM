@@ -40,7 +40,8 @@ export default async function LeadDetailsPage({
   const { data, error } = await supabase
     .from("leads")
     .select(
-      `id, stage, stage_changed_at, interested_service, lost_reason, created_at, updated_at,
+      `id, stage, stage_changed_at, lost_reason, created_at, updated_at,
+       interested_services:lead_interested_services(service_type),
        contact:contacts(id, full_name, phone, email, instagram_username, notes),
        touchpoints(id, channel, certainty, source_detail, is_primary, occurred_at, created_at),
        follow_up_tasks(id, title, notes, due_at, status, completed_at, completed_note, source, created_at, updated_at),
@@ -83,6 +84,7 @@ export default async function LeadDetailsPage({
             leadId={lead.id}
             stage={lead.stage}
             contactName={lead.contact.full_name}
+            interestedServices={lead.interested_services.map((s) => s.service_type)}
             size="md"
           />
         </div>
@@ -95,10 +97,18 @@ export default async function LeadDetailsPage({
           <Card>
             <CardHeader title="פרטי הליד" />
             <div className="grid grid-cols-1 gap-4 px-5 py-4 sm:grid-cols-2">
-              <Field label="שירות שמעניין אותה">
-                {lead.interested_service
-                  ? SERVICE_TYPE_LABELS[lead.interested_service]
-                  : "לא צוין"}
+              <Field label="שירותים שמעניינים אותה">
+                {lead.interested_services.length > 0 ? (
+                  <span className="inline-flex flex-wrap gap-1.5">
+                    {lead.interested_services.map((s) => (
+                      <Badge key={s.service_type} tone="neutral">
+                        {SERVICE_TYPE_LABELS[s.service_type]}
+                      </Badge>
+                    ))}
+                  </span>
+                ) : (
+                  "לא צוין"
+                )}
               </Field>
               <Field label="נוצר בתאריך">{formatDate(lead.created_at)}</Field>
               <Field label="שינוי שלב אחרון">

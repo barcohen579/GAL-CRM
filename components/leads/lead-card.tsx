@@ -19,6 +19,7 @@ export function LeadCard({ lead }: { lead: LeadWithRelations }) {
   const overdue = nextFollowUp ? new Date(nextFollowUp.due_at) < new Date() : false;
   const contactName = lead.contact?.full_name ?? "איש קשר לא ידוע";
   const href = `/leads/${lead.id}`;
+  const interestedServiceTypes = lead.interested_services.map((s) => s.service_type);
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-3.5 shadow-sm transition-shadow hover:shadow-md">
@@ -36,13 +37,14 @@ export function LeadCard({ lead }: { lead: LeadWithRelations }) {
           leadId={lead.id}
           stage={lead.stage}
           contactName={contactName}
+          interestedServices={interestedServiceTypes}
         />
       </div>
 
       <Link href={href} className="block">
-        {lead.interested_service && (
+        {interestedServiceTypes.length > 0 && (
           <p className="mt-0.5 truncate text-xs text-zinc-500">
-            {SERVICE_TYPE_LABELS[lead.interested_service]}
+            {interestedServiceTypes.map((s) => SERVICE_TYPE_LABELS[s]).join(", ")}
           </p>
         )}
 

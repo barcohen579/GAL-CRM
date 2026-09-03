@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { CreateFollowUpDialog } from "@/components/follow-ups/create-follow-up-dialog";
 import { FollowUpTaskActions } from "@/components/follow-ups/follow-up-task-actions";
 import { RecordPaymentDialog } from "@/components/payments/record-payment-dialog";
+import { AddServiceDialog } from "@/components/customers/add-service-dialog";
 import {
   SERVICE_TYPE_LABELS,
   PURCHASE_STATUS_TONE,
@@ -34,10 +35,10 @@ export default async function CustomerDetailsPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ created?: string }>;
+  searchParams: Promise<{ created?: string; converted?: string }>;
 }) {
   const { id } = await params;
-  const { created } = await searchParams;
+  const { created, converted } = await searchParams;
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -94,6 +95,12 @@ export default async function CustomerDetailsPage({
       {created === "1" && (
         <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           הלקוחה נוספה בהצלחה.
+        </p>
+      )}
+
+      {converted === "1" && (
+        <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          הליד נסגר בהצלחה. אם היא רכשה עוד שירות, אפשר להוסיף אותו כאן.
         </p>
       )}
 
@@ -159,10 +166,13 @@ export default async function CustomerDetailsPage({
             <CardHeader
               title="רכישות"
               action={
-                <RecordPaymentDialog
-                  customerId={customer.id}
-                  purchases={allPurchasesSimplified}
-                />
+                <div className="flex items-center gap-2">
+                  <AddServiceDialog customerId={customer.id} />
+                  <RecordPaymentDialog
+                    customerId={customer.id}
+                    purchases={allPurchasesSimplified}
+                  />
+                </div>
               }
             />
             {customer.purchases.length === 0 ? (

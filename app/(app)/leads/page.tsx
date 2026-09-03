@@ -23,7 +23,8 @@ export default async function LeadsPage({
   const { data, error } = await supabase
     .from("leads")
     .select(
-      `id, stage, interested_service, created_at,
+      `id, stage, created_at,
+       interested_services:lead_interested_services(service_type),
        contact:contacts(id, full_name, phone, email, instagram_username),
        touchpoints(channel, is_primary),
        follow_up_tasks(id, due_at, status)`

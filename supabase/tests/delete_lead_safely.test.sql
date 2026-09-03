@@ -66,10 +66,14 @@ begin
   insert into public.lead_stage_events (lead_id, from_stage, to_stage) values (v_lead_a, 'NEW', 'CONTACTED');
   insert into public.touchpoints (lead_id, channel, certainty, is_primary) values (v_lead_a, 'WALK_IN', 'CONFIRMED', true);
   insert into public.follow_up_tasks (lead_id, title, due_at) values (v_lead_a, 'test followup', now() + interval '1 day');
+  insert into public.lead_interested_services (lead_id, service_type) values (v_lead_a, 'GROUP_TRAINING'), (v_lead_a, 'NUTRITION_COACHING');
 
   select * into v_result from public.delete_lead_safely(v_lead_a);
   if v_result.contact_deleted is not true then
     raise exception 'ASSERTION FAILED (Scenario 1): expected contact_deleted = true, got %', v_result.contact_deleted;
+  end if;
+  if exists(select 1 from public.lead_interested_services where lead_id = v_lead_a) then
+    raise exception 'ASSERTION FAILED (Scenario 1): lead_interested_services not cleaned up';
   end if;
   if exists(select 1 from public.lead_stage_events where lead_id = v_lead_a) then
     raise exception 'ASSERTION FAILED (Scenario 1): lead_stage_events not cleaned up';

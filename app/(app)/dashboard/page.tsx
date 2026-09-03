@@ -54,7 +54,7 @@ export const dynamic = "force-dynamic";
 type RecentLead = {
   id: string;
   stage: LeadStage;
-  interested_service: ServiceType | null;
+  interested_services: { service_type: ServiceType }[];
   created_at: string;
   contact: { full_name: string } | null;
 };
@@ -146,7 +146,7 @@ export default async function DashboardPage({
     supabase
       .from("leads")
       .select(
-        "id, stage, interested_service, created_at, contact:contacts(full_name)"
+        "id, stage, created_at, interested_services:lead_interested_services(service_type), contact:contacts(full_name)"
       )
       .order("created_at", { ascending: false })
       .limit(5),
@@ -416,8 +416,10 @@ export default async function DashboardPage({
                         {lead.contact?.full_name ?? "איש קשר לא ידוע"}
                       </p>
                       <p className="truncate text-xs text-zinc-500">
-                        {lead.interested_service
-                          ? SERVICE_TYPE_LABELS[lead.interested_service]
+                        {lead.interested_services.length > 0
+                          ? lead.interested_services
+                              .map((s) => SERVICE_TYPE_LABELS[s.service_type])
+                              .join(", ")
                           : "לא צוין שירות"}{" "}
                         · {formatDate(lead.created_at)}
                       </p>

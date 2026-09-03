@@ -27,7 +27,13 @@ export async function createLead(
   const phone = optionalString(formData.get("phone"));
   const email = optionalString(formData.get("email"));
   const instagramUsername = optionalString(formData.get("instagram_username"));
-  const interestedService = optionalString(formData.get("interested_service"));
+  // A lead may be interested in more than one service at once — see
+  // public.lead_interested_services. getAll() returns every checked
+  // checkbox sharing this field name; an unchecked field is simply
+  // absent, never an empty-string entry.
+  const interestedServices = formData
+    .getAll("interested_services")
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
   const channel = optionalString(formData.get("channel"));
   const notes = optionalString(formData.get("notes"));
   const followUpAt = optionalString(formData.get("follow_up_at"));
@@ -58,7 +64,6 @@ export async function createLead(
     .from("leads")
     .insert({
       contact_id: contact.id,
-      interested_service: interestedService,
     })
     .select("id")
     .single();
@@ -75,9 +80,18 @@ export async function createLead(
     };
   }
 
-  // Both of the following are best-effort: the lead itself already
+  // All of the following are best-effort: the lead itself already
   // exists at this point, so a failure here is logged, not fatal to the
   // whole submission.
+  if (interestedServices.length > 0) {
+    const { error: servicesError } = await supabase
+      .from("lead_interested_services")
+      .insert(interestedServices.map((s) => ({ lead_id: lead.id, service_type: s })));
+    if (servicesError) {
+      console.error("createLead: interested services insert failed:", servicesError.message);
+    }
+  }
+
   if (channel) {
     const { error: touchpointError } = await supabase
       .from("touchpoints")
@@ -151,10 +165,7 @@ export async function changeLeadStage(
 // WON conversion
 // ============================================================
 
-export type ConvertToWonState = {
-  error: string | null;
-  success?: boolean;
-};
+export type ConvertToWonState = { error: string | null };
 
 export async function convertLeadToWon(
   _prevState: ConvertToWonState,
@@ -186,19 +197,26 @@ export async function convertLeadToWon(
 
   const supabase = await createClient();
 
-  const { error } = await supabase.rpc("convert_lead_to_won", {
-    p_lead_id: leadId,
-    p_service_type: serviceType,
-    p_custom_service_name: serviceType === "OTHER" ? customServiceName : null,
-    p_agreed_price_amount: agreedPriceAmount,
-    p_recurrence: recurrence,
-    p_start_date: startDate,
-    p_notes: notes,
-  });
+  const { data: rpcData, error } = await supabase
+    .rpc("convert_lead_to_won", {
+      p_lead_id: leadId,
+      p_service_type: serviceType,
+      p_custom_service_name: serviceType === "OTHER" ? customServiceName : null,
+      p_agreed_price_amount: agreedPriceAmount,
+      p_recurrence: recurrence,
+      p_start_date: startDate,
+      p_notes: notes,
+    })
+    .single();
 
-  if (error) {
-    return { error: `לא הצלחנו לסגור את הליד: ${error.message}` };
+  if (error || !rpcData) {
+    return { error: `לא הצלחנו לסגור את הליד: ${error?.message ?? "שגיאה לא ידועה"}` };
   }
+
+  // Hand-written, not codegen — same convention as
+  // app/(app)/customers/actions.ts for an RPC result outside
+  // lib/crm/types.ts's small hand-written surface.
+  const { customer_id: customerId } = rpcData as { customer_id: string; purchase_id: string };
 
   revalidatePath("/leads");
   revalidatePath(`/leads/${leadId}`);
@@ -206,7 +224,13 @@ export async function convertLeadToWon(
   revalidatePath("/customers");
   revalidatePath("/payments");
 
-  return { error: null, success: true };
+  // Converting records ONE purchased service — a lead interested in
+  // several services is NOT assumed to have bought all of them (see
+  // WonConversionDialog's own interested-services context note). If
+  // there's more to record, /customers/[id]'s "הוספת שירות" action is
+  // the natural next step — landing there directly makes that handoff
+  // smooth rather than leaving Gal to navigate there herself.
+  redirect(`/customers/${customerId}?converted=1`);
 }
 
 // ============================================================

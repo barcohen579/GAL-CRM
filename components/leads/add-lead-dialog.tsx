@@ -119,23 +119,27 @@ export function AddLeadDialog() {
               />
             </div>
 
-            <div className="space-y-1">
-              <label htmlFor="interested_service" className={labelClass}>
-                שירות שמעניין אותה
-              </label>
-              <select
-                id="interested_service"
-                name="interested_service"
-                defaultValue=""
-                className={inputClass}
-              >
-                <option value="">עדיין לא ברור</option>
+            <div className="sm:col-span-2 space-y-1">
+              <span className={labelClass}>שירותים שמעניינים אותה</span>
+              <p className="text-[11px] text-zinc-400">
+                אפשר לסמן יותר מאחד — או להשאיר ריק אם עדיין לא ברור.
+              </p>
+              <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 rounded-lg border border-zinc-200 p-3 sm:grid-cols-2">
                 {SERVICE_TYPES.map((s) => (
-                  <option key={s} value={s}>
+                  <label
+                    key={s}
+                    className="flex items-center gap-2 text-sm text-zinc-700"
+                  >
+                    <input
+                      type="checkbox"
+                      name="interested_services"
+                      value={s}
+                      className="h-3.5 w-3.5 rounded border-zinc-300 text-rose-600 focus:ring-rose-300"
+                    />
                     {SERVICE_TYPE_LABELS[s]}
-                  </option>
+                  </label>
                 ))}
-              </select>
+              </div>
             </div>
 
             <div className="space-y-1">

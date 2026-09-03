@@ -149,3 +149,60 @@ export function monthDateBounds(key: MonthKey): { startDate: string; endDate: st
   const end = toLocalDateOnly(y, m, 0); // day 0 of next month = last day of this month
   return { startDate: toDateString(start), endDate: toDateString(end) };
 }
+
+/** A valid "YYYY-MM" key, and nothing else — guards against a
+ *  malformed ?month= query param (garbage, a full date, empty string)
+ *  ever reaching a date computation. */
+export function isValidMonthKey(value: unknown): value is MonthKey {
+  return typeof value === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
+}
+
+function nextMonthKeyOf(key: MonthKey): MonthKey {
+  const [y, m] = key.split("-").map(Number);
+  return monthKeyOf(toLocalDateOnly(y, m, 1)); // m is 1-based -> already next month, 0-based
+}
+
+export type SelectedMonth = {
+  key: MonthKey;
+  label: string;
+  isCurrentMonth: boolean;
+  /** The month a "next" control should navigate to — null when already
+   *  at the current month (there is nothing useful to show for a
+   *  future month with zero data by definition, so navigation is
+   *  capped here rather than merely hidden after the fact). */
+  nextMonthKey: MonthKey | null;
+  previousMonthKey: MonthKey;
+  startDate: string;
+  endDate: string;
+  startTimestamp: string;
+  endTimestampExclusive: string;
+};
+
+/** Resolves the Monthly Business Report's selected month from a raw
+ *  `?month=` query param. Invalid/missing/future input all fall back
+ *  to the current month — this is a deliberate fail-safe default, not
+ *  a silent data-hiding bug: a future month has no data to report by
+ *  definition (see the task's own "do not allow navigating into
+ *  meaningless future reporting periods" requirement), so there is no
+ *  honest report to build for one regardless of what was requested. */
+export function resolveSelectedMonth(rawMonth: string | undefined): SelectedMonth {
+  const curKey = currentMonthKey();
+  const key = isValidMonthKey(rawMonth) && rawMonth <= curKey ? rawMonth : curKey;
+
+  const { startDate, endDate } = monthDateBounds(key);
+  const { startTimestamp, endTimestampExclusive } = monthTimestampBounds(key);
+  const isCurrentMonth = key === curKey;
+  const candidateNext = nextMonthKeyOf(key);
+
+  return {
+    key,
+    label: formatMonthLabel(key),
+    isCurrentMonth,
+    nextMonthKey: candidateNext <= curKey ? candidateNext : null,
+    previousMonthKey: previousMonthKeyOf(key),
+    startDate,
+    endDate,
+    startTimestamp,
+    endTimestampExclusive,
+  };
+}

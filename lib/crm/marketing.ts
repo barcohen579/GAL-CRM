@@ -160,11 +160,30 @@ export type MonthlyMetrics = {
   revenueToSpendRatio: number | null;
   confirmedMetaRevenueMinor: number;
   confirmedMetaRoas: number | null;
+  /** Manually-entered business_expenses only — never Meta spend (that
+   *  stays in metaSpendMinor, its own separate figure). Always a real
+   *  number (0 when none were entered) — unlike metaSpendMinor, there
+   *  is no "unsynced" concept for manual data: no rows genuinely means
+   *  ₪0 was entered. */
+  otherExpensesMinor: number;
+  /** metaSpendMinor + otherExpensesMinor. null whenever metaSpendMinor
+   *  is null — an unknown Meta figure must never be silently treated
+   *  as 0 (that would understate total expenses and overstate profit). */
+  totalExpensesMinor: number | null;
+  /** רווח משוער — revenueMinor - totalExpensesMinor. A MANAGEMENT
+   *  metric only: no VAT/income tax/National Insurance/depreciation is
+   *  represented anywhere in this schema, so this is never accounting
+   *  net profit. null whenever totalExpensesMinor is null, for the
+   *  same reason. */
+  estimatedProfitMinor: number | null;
   changeVsPreviousMonth: {
     metaSpend: MonthOverMonthChange;
     newLeads: MonthOverMonthChange;
     won: MonthOverMonthChange;
     revenue: MonthOverMonthChange;
+    otherExpenses: MonthOverMonthChange;
+    totalExpenses: MonthOverMonthChange;
+    estimatedProfit: MonthOverMonthChange;
   };
 };
 
@@ -182,6 +201,8 @@ export function buildMonthlyMetrics(input: {
   wonEvents: { lead_id: string; changed_at: string }[];
   payments: { amount: number; paid_at: string; purchase_id: string }[];
   confirmedMetaPurchaseIds: string[];
+  /** Manually-entered business_expenses rows — never Meta spend. */
+  businessExpenses?: { amount_minor: number; expense_date: string }[];
   currentMonthKey: string;
   monthKeyOf: (value: string) => string;
   previousMonthKeyOf: (key: string) => string;
@@ -193,6 +214,7 @@ export function buildMonthlyMetrics(input: {
     wonEvents,
     payments,
     confirmedMetaPurchaseIds,
+    businessExpenses = [],
     currentMonthKey: curKey,
     monthKeyOf,
     previousMonthKeyOf,
@@ -214,6 +236,7 @@ export function buildMonthlyMetrics(input: {
   for (const r of metaRows) monthKeys.add(monthKeyOf(r.metric_date));
   for (const l of leads) monthKeys.add(monthKeyOf(l.created_at));
   for (const p of payments) monthKeys.add(monthKeyOf(p.paid_at));
+  for (const e of businessExpenses) monthKeys.add(monthKeyOf(e.expense_date));
   // wonEvents intentionally not added on its own — a WON transition
   // implies the lead exists, so its month is already covered via
   // `leads`; this avoids a WON-only month with no other context.
@@ -231,6 +254,7 @@ export function buildMonthlyMetrics(input: {
       wonCount: number;
       revenueMinor: number;
       confirmedMetaRevenueMinor: number;
+      otherExpensesMinor: number;
     }
   >();
   const emptyBucket = () => ({
@@ -242,6 +266,7 @@ export function buildMonthlyMetrics(input: {
     wonCount: 0,
     revenueMinor: 0,
     confirmedMetaRevenueMinor: 0,
+    otherExpensesMinor: 0,
   });
   for (const key of sortedKeys) perMonth.set(key, emptyBucket());
 
@@ -249,6 +274,12 @@ export function buildMonthlyMetrics(input: {
     const key = monthKeyOf(r.metric_date);
     const bucket = perMonth.get(key);
     if (bucket) bucket.metaSpendMinor += r.spend_minor;
+  }
+
+  for (const e of businessExpenses) {
+    const key = monthKeyOf(e.expense_date);
+    const bucket = perMonth.get(key);
+    if (bucket) bucket.otherExpensesMinor += e.amount_minor;
   }
 
   for (const l of leads) {
@@ -306,10 +337,21 @@ export function buildMonthlyMetrics(input: {
           ? null
           : safeDivide(bucket.confirmedMetaRevenueMinor, metaSpendMinor);
 
+      // Total expenses / estimated profit — null whenever metaSpendMinor
+      // is null (an unsynced month), never silently treated as "Meta
+      // spent ₪0" — see MonthlyMetrics's own field comments.
+      const totalExpensesMinor = metaSpendMinor === null ? null : metaSpendMinor + bucket.otherExpensesMinor;
+      const estimatedProfitMinor =
+        totalExpensesMinor === null ? null : bucket.revenueMinor - totalExpensesMinor;
+
       const prevKey = previousMonthKeyOf(key);
       const prevBucket = perMonth.get(prevKey) ?? null;
       const prevMetaSpend =
         prevBucket === null ? null : isMonthWithinSyncedSpan(prevKey) ? prevBucket.metaSpendMinor : null;
+      const prevTotalExpenses =
+        prevMetaSpend === null || prevBucket === null ? null : prevMetaSpend + prevBucket.otherExpensesMinor;
+      const prevEstimatedProfit =
+        prevTotalExpenses === null || prevBucket === null ? null : prevBucket.revenueMinor - prevTotalExpenses;
 
       const isCurrentMonth = key === curKey;
 
@@ -322,7 +364,15 @@ export function buildMonthlyMetrics(input: {
       // Same-days-so-far comparison is a deliberate future enhancement,
       // not implemented here.
       const changeVsPreviousMonth = isCurrentMonth
-        ? { metaSpend: null, newLeads: null, won: null, revenue: null }
+        ? {
+            metaSpend: null,
+            newLeads: null,
+            won: null,
+            revenue: null,
+            otherExpenses: null,
+            totalExpenses: null,
+            estimatedProfit: null,
+          }
         : {
             // No comparison at all when THIS month's own spend is
             // unknown — showing a % against an implied "0" would claim
@@ -331,6 +381,13 @@ export function buildMonthlyMetrics(input: {
             newLeads: monthOverMonthChange(bucket.newLeadsCount, prevBucket?.newLeadsCount),
             won: monthOverMonthChange(bucket.wonCount, prevBucket?.wonCount),
             revenue: monthOverMonthChange(bucket.revenueMinor, prevBucket?.revenueMinor),
+            otherExpenses: monthOverMonthChange(bucket.otherExpensesMinor, prevBucket?.otherExpensesMinor),
+            totalExpenses:
+              totalExpensesMinor === null ? null : monthOverMonthChange(totalExpensesMinor, prevTotalExpenses),
+            estimatedProfit:
+              estimatedProfitMinor === null
+                ? null
+                : monthOverMonthChange(estimatedProfitMinor, prevEstimatedProfit),
           };
 
       return {
@@ -348,6 +405,9 @@ export function buildMonthlyMetrics(input: {
         revenueToSpendRatio,
         confirmedMetaRevenueMinor: bucket.confirmedMetaRevenueMinor,
         confirmedMetaRoas,
+        otherExpensesMinor: bucket.otherExpensesMinor,
+        totalExpensesMinor,
+        estimatedProfitMinor,
         changeVsPreviousMonth,
       };
     })

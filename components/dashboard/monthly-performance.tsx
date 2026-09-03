@@ -40,7 +40,7 @@ export function MonthlyPerformance({ months }: { months: MonthlyMetrics[] }) {
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] text-sm">
+          <table className="w-full min-w-[1320px] text-sm">
             <thead>
               <tr className="border-b border-zinc-100 text-xs text-zinc-500">
                 <th className="px-5 py-2.5 text-start font-medium">חודש</th>
@@ -50,6 +50,9 @@ export function MonthlyPerformance({ months }: { months: MonthlyMetrics[] }) {
                 <th className="px-5 py-2.5 text-end font-medium">מאומתים ממטא</th>
                 <th className="px-5 py-2.5 text-end font-medium">נסגרו (WON)</th>
                 <th className="px-5 py-2.5 text-end font-medium">הכנסות בפועל</th>
+                <th className="px-5 py-2.5 text-end font-medium">הוצאות עסק</th>
+                <th className="px-5 py-2.5 text-end font-medium">סה״כ הוצאות</th>
+                <th className="px-5 py-2.5 text-end font-medium">רווח משוער</th>
                 <th className="px-5 py-2.5 text-end font-medium">CPL מאומת</th>
                 <th className="px-5 py-2.5 text-end font-medium">הכנסה/הוצאה</th>
                 <th className="px-5 py-2.5 text-end font-medium">ROAS מאומת</th>
@@ -91,6 +94,32 @@ export function MonthlyPerformance({ months }: { months: MonthlyMetrics[] }) {
                     <ChangeBadge change={m.changeVsPreviousMonth.revenue} />
                   </td>
                   <td className="px-5 py-3 text-end">
+                    <div>{formatMoney(m.otherExpensesMinor)}</div>
+                    <ChangeBadge change={m.changeVsPreviousMonth.otherExpenses} />
+                  </td>
+                  <td className="px-5 py-3 text-end">
+                    {m.totalExpensesMinor === null ? (
+                      <span className="text-zinc-400">—</span>
+                    ) : (
+                      <div>{formatMoney(m.totalExpensesMinor)}</div>
+                    )}
+                    <ChangeBadge change={m.changeVsPreviousMonth.totalExpenses} />
+                  </td>
+                  <td className="px-5 py-3 text-end">
+                    {m.estimatedProfitMinor === null ? (
+                      <span className="text-zinc-400">—</span>
+                    ) : (
+                      <div
+                        className={
+                          m.estimatedProfitMinor < 0 ? "font-medium text-red-600" : undefined
+                        }
+                      >
+                        {formatMoney(m.estimatedProfitMinor)}
+                      </div>
+                    )}
+                    <ChangeBadge change={m.changeVsPreviousMonth.estimatedProfit} />
+                  </td>
+                  <td className="px-5 py-3 text-end">
                     {m.primaryCplMinor === null ? (
                       <span className="text-xs text-zinc-400">אין מספיק נתונים</span>
                     ) : (
@@ -119,7 +148,8 @@ export function MonthlyPerformance({ months }: { months: MonthlyMetrics[] }) {
       )}
       <p className="border-t border-zinc-100 px-5 py-3 text-xs text-zinc-500">
         &quot;הכנסה/הוצאה&quot; הוא יחס כלל הכנסות העסק מול הוצאת מטא — לא ROAS של מטא. ROAS מאומת
-        מוצג רק כאשר קיימים לידים עם ייחוס מאומת (CONFIRMED) ממטא.
+        מוצג רק כאשר קיימים לידים עם ייחוס מאומת (CONFIRMED) ממטא. &quot;רווח משוער&quot; הוא מדד ניהולי
+        (הכנסות פחות סה״כ הוצאות) — לא רווח חשבונאי, ואינו כולל מע״מ, מס הכנסה, ביטוח לאומי או פחת.
       </p>
     </Card>
   );

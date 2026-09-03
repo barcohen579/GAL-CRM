@@ -189,3 +189,25 @@ export const CUSTOMER_STATUS_LABELS: Record<string, string> = {
   ACTIVE: "פעילה",
   INACTIVE: "לא פעילה",
 };
+
+export const BUSINESS_EXPENSE_CATEGORIES = [
+  "RENT",
+  "SOFTWARE_SUBSCRIPTIONS",
+  "EQUIPMENT",
+  "MARKETING_OTHER",
+  "PROFESSIONAL_SERVICES",
+  "MAINTENANCE",
+  "OTHER",
+] as const;
+
+export type BusinessExpenseCategory = (typeof BUSINESS_EXPENSE_CATEGORIES)[number];
+
+export const BUSINESS_EXPENSE_CATEGORY_LABELS: Record<BusinessExpenseCategory, string> = {
+  RENT: "שכירות",
+  SOFTWARE_SUBSCRIPTIONS: "תוכנות ומנויים",
+  EQUIPMENT: "ציוד",
+  MARKETING_OTHER: "שיווק ופרסום אחר",
+  PROFESSIONAL_SERVICES: "אנשי מקצוע / ספקים",
+  MAINTENANCE: "תחזוקה",
+  OTHER: "אחר",
+};

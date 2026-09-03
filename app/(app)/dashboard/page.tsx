@@ -4,9 +4,7 @@ import {
   UserPlus,
   Clock,
   Dumbbell,
-  Trophy,
   Wallet,
-  TrendingUp,
   ArrowLeft,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
@@ -20,19 +18,16 @@ import {
   type MarketingPerformanceData,
 } from "@/components/dashboard/marketing-performance";
 import { MonthlyPerformance } from "@/components/dashboard/monthly-performance";
+import { BusinessReport, type BusinessReportData } from "@/components/dashboard/business-report";
 import {
   LEAD_STAGE_LABELS,
   LEAD_STAGE_TONE,
   SERVICE_TYPE_LABELS,
 } from "@/lib/crm/constants";
-import {
-  formatDate,
-  formatMoney,
-  formatRelative,
-  startOfMonthISO,
-} from "@/lib/crm/format";
+import { formatDate, formatMoney, formatRelative } from "@/lib/crm/format";
 import {
   resolveMarketingRange,
+  resolveSelectedMonth,
   currentMonthKey,
   monthKeyOf,
   previousMonthKeyOf,
@@ -45,8 +40,15 @@ import {
   buildMonthlyMetrics,
   type MetaDailyRow,
   type LeadTouchpointForAttribution,
+  type MonthlyMetrics,
 } from "@/lib/crm/marketing";
-import type { LeadStage, ServiceType } from "@/lib/crm/constants";
+import {
+  aggregateRevenueByService,
+  aggregateLeadSources,
+  buildMonthlySalesFunnel,
+  buildMonthlyReferralMetrics,
+} from "@/lib/crm/business-report";
+import type { LeadStage, ServiceType, TouchpointChannel } from "@/lib/crm/constants";
 
 export const metadata: Metadata = { title: "לוח בקרה — GAL CRM" };
 export const dynamic = "force-dynamic";
@@ -82,23 +84,19 @@ type RecentPayment = {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ range?: string }>;
+  searchParams: Promise<{ range?: string; month?: string }>;
 }) {
-  const { range: rangeParam } = await searchParams;
+  const { range: rangeParam, month: monthParam } = await searchParams;
   const range = resolveMarketingRange(rangeParam);
+  const selectedMonth = resolveSelectedMonth(monthParam);
 
   const supabase = await createClient();
-  const monthStart = startOfMonthISO();
   const nowIso = new Date().toISOString();
 
   const [
     newLeadsRes,
     followUpsDueRes,
     trialsBookedRes,
-    wonThisMonthRes,
-    paymentsThisMonthRes,
-    wonAllTimeRes,
-    lostAllTimeRes,
     recentLeadsRes,
     upcomingFollowUpsRes,
     recentPaymentsRes,
@@ -111,6 +109,14 @@ export default async function DashboardPage({
     allLeadsWithTouchpointsRes,
     allWonEventsRes,
     allPaidPaymentsRes,
+    allBusinessExpensesRes,
+    businessExpensesInMonthRes,
+    paymentsInMonthWithServiceRes,
+    leadsInMonthWithFullTouchpointsRes,
+    lostEventsInMonthRes,
+    newCustomersInMonthRes,
+    allReferralsRes,
+    allCustomersContactMapRes,
   ] = await Promise.all([
     supabase
       .from("leads")
@@ -125,24 +131,6 @@ export default async function DashboardPage({
       .from("leads")
       .select("id", { count: "exact", head: true })
       .eq("stage", "TRIAL_BOOKED"),
-    supabase
-      .from("leads")
-      .select("id", { count: "exact", head: true })
-      .eq("stage", "WON")
-      .gte("stage_changed_at", monthStart),
-    supabase
-      .from("payments")
-      .select("amount")
-      .eq("status", "PAID")
-      .gte("paid_at", monthStart.slice(0, 10)),
-    supabase
-      .from("leads")
-      .select("id", { count: "exact", head: true })
-      .eq("stage", "WON"),
-    supabase
-      .from("leads")
-      .select("id", { count: "exact", head: true })
-      .eq("stage", "LOST"),
     supabase
       .from("leads")
       .select(
@@ -208,6 +196,53 @@ export default async function DashboardPage({
     supabase.from("leads").select("id, created_at, touchpoints(channel, certainty)"),
     supabase.from("lead_stage_events").select("lead_id, changed_at").eq("to_stage", "WON"),
     supabase.from("payments").select("amount, paid_at, purchase_id").eq("status", "PAID"),
+    // Business expenses (never Meta spend — see business_expenses'
+    // own migration) — ALL-TIME for the trend table, feeding
+    // buildMonthlyMetrics exactly like allPaidPaymentsRes/allWonEventsRes
+    // above.
+    supabase.from("business_expenses").select("amount_minor, expense_date"),
+
+    // ---- Monthly Business Report — everything scoped to
+    // selectedMonth, that buildMonthlyMetrics/the queries above don't
+    // already cover. ----
+    supabase
+      .from("business_expenses")
+      .select("id, expense_date, amount_minor, category, description")
+      .gte("expense_date", selectedMonth.startDate)
+      .lte("expense_date", selectedMonth.endDate)
+      .order("expense_date", { ascending: false }),
+    supabase
+      .from("payments")
+      .select("amount, purchase_id, purchase:purchases(service_type, customer_id)")
+      .eq("status", "PAID")
+      .gte("paid_at", selectedMonth.startDate)
+      .lte("paid_at", selectedMonth.endDate),
+    // Full touchpoint shape (is_primary + created_at) needed for lead-
+    // source attribution — allLeadsWithTouchpointsRes above only carries
+    // channel/certainty (all it needs for the trend table).
+    supabase
+      .from("leads")
+      .select("id, touchpoints(channel, certainty, is_primary, created_at)")
+      .gte("created_at", selectedMonth.startTimestamp)
+      .lt("created_at", selectedMonth.endTimestampExclusive),
+    supabase
+      .from("lead_stage_events")
+      .select("lead_id")
+      .eq("to_stage", "LOST")
+      .gte("changed_at", selectedMonth.startTimestamp)
+      .lt("changed_at", selectedMonth.endTimestampExclusive),
+    supabase
+      .from("customers")
+      .select("id", { count: "exact", head: true })
+      .gte("customer_since", selectedMonth.startDate)
+      .lte("customer_since", selectedMonth.endDate),
+    // Referrals — direct only, never recursive (see referrals.ts's own
+    // reasoning). ALL-TIME: the "ever referred" customer set for the
+    // revenue figure needs every referral regardless of when it
+    // happened, exactly like confirmedMetaPurchaseIds above is global
+    // while only its resulting revenue is month-scoped.
+    supabase.from("referrals").select("created_at, referred_contact_id"),
+    supabase.from("customers").select("id, contact_id"),
   ]);
 
   // Meta spend + campaign table for the selected range.
@@ -294,11 +329,135 @@ export default async function DashboardPage({
     wonEvents: allWonEventsRes.data ?? [],
     payments: allPaidPaymentsRes.data ?? [],
     confirmedMetaPurchaseIds,
+    businessExpenses: allBusinessExpensesRes.data ?? [],
     currentMonthKey: currentMonthKey(),
     monthKeyOf,
     previousMonthKeyOf,
     formatMonthLabel,
   });
+
+  // ================================================================
+  // Monthly Business Report (selectedMonth) — reuses the SAME
+  // buildMonthlyMetrics row computed above for the selected month
+  // (revenue/Meta spend/expenses/profit/won/newLeads + their MoM
+  // comparisons, all already correctly null-guarded for an unsynced
+  // month or a partial current month) rather than recomputing any of
+  // that separately. Only what buildMonthlyMetrics doesn't cover is
+  // computed fresh below: lost-events, new-customers, revenue-by-
+  // service, lead-sources, referral metrics, and the raw expense list.
+  // ================================================================
+
+  const selectedMonthRow: MonthlyMetrics =
+    monthlyMetrics.find((m) => m.monthKey === selectedMonth.key) ?? {
+      monthKey: selectedMonth.key,
+      label: selectedMonth.label,
+      isCurrentMonth: selectedMonth.isCurrentMonth,
+      metaSpendMinor: null,
+      newLeadsCount: 0,
+      metaAttributedLeadsCount: 0,
+      confirmedMetaLeadsCount: 0,
+      broadMetaLeadsCount: 0,
+      wonCount: 0,
+      revenueMinor: 0,
+      primaryCplMinor: null,
+      revenueToSpendRatio: null,
+      confirmedMetaRevenueMinor: 0,
+      confirmedMetaRoas: null,
+      otherExpensesMinor: 0,
+      totalExpensesMinor: null,
+      estimatedProfitMinor: null,
+      changeVsPreviousMonth: {
+        metaSpend: null,
+        newLeads: null,
+        won: null,
+        revenue: null,
+        otherExpenses: null,
+        totalExpenses: null,
+        estimatedProfit: null,
+      },
+    };
+
+  // WON leads in the selected month that are ALSO confirmed-Meta-
+  // attributed — "customers/WON attributable to Meta where reliably
+  // traceable" (item 4). Reuses allWonEventsRes (already fetched
+  // all-time) filtered to this month, cross-referenced against the
+  // SAME confirmedMetaLeadIds computed above for the whole page.
+  const wonLeadIdsInMonth = (allWonEventsRes.data ?? [])
+    .filter((e) => monthKeyOf(e.changed_at) === selectedMonth.key)
+    .map((e) => e.lead_id);
+  const confirmedMetaLeadIdSet = new Set(confirmedMetaLeadIds);
+  const metaAttributedWonCount = new Set(
+    wonLeadIdsInMonth.filter((id) => confirmedMetaLeadIdSet.has(id))
+  ).size;
+
+  // Sales funnel — see lib/crm/business-report.ts's own doc comment
+  // for the precise, deliberately-chosen definition of every figure
+  // here (especially conversionRatePercent — NOT newLeads-based).
+  const lostLeadIdsInMonth = (lostEventsInMonthRes.data ?? []).map((e) => e.lead_id);
+  const salesFunnel = buildMonthlySalesFunnel({
+    newLeadsCount: selectedMonthRow.newLeadsCount,
+    wonLeadIds: wonLeadIdsInMonth,
+    lostLeadIds: lostLeadIdsInMonth,
+    newCustomersCount: newCustomersInMonthRes.count ?? 0,
+  });
+
+  // Revenue by service — reconciles exactly to selectedMonthRow.revenueMinor
+  // by construction (same PAID/paid_at-in-month payment set).
+  const paymentsInMonthWithService = (paymentsInMonthWithServiceRes.data ??
+    []) as unknown as {
+    amount: number;
+    purchase_id: string;
+    purchase: { service_type: ServiceType; customer_id: string } | null;
+  }[];
+  const revenueByService = aggregateRevenueByService(paymentsInMonthWithService);
+
+  // Lead sources — one bucket per Lead, primary-touchpoint-first (see
+  // aggregateLeadSources's own doc comment for the full rule).
+  const leadsInMonthForSources = (leadsInMonthWithFullTouchpointsRes.data ??
+    []) as unknown as {
+    id: string;
+    touchpoints: { channel: TouchpointChannel; certainty: string; is_primary: boolean; created_at: string }[];
+  }[];
+  const leadSources = aggregateLeadSources(leadsInMonthForSources);
+
+  // Referral metrics — direct only, never recursive (see
+  // buildMonthlyReferralMetrics's own doc comment).
+  const contactIdToCustomerId = new Map(
+    (allCustomersContactMapRes.data ?? []).map((c) => [c.contact_id, c.id])
+  );
+  const referralMetrics = buildMonthlyReferralMetrics({
+    allReferrals: allReferralsRes.data ?? [],
+    contactIdToCustomerId,
+    paymentsInMonth: paymentsInMonthWithService.map((p) => ({
+      amount: p.amount,
+      customerId: p.purchase?.customer_id ?? null,
+    })),
+    monthKey: selectedMonth.key,
+    monthKeyOf,
+  });
+
+  const businessReportData: BusinessReportData = {
+    selectedMonth,
+    revenueMinor: selectedMonthRow.revenueMinor,
+    metaSpendMinor: selectedMonthRow.metaSpendMinor,
+    otherExpensesMinor: selectedMonthRow.otherExpensesMinor,
+    totalExpensesMinor: selectedMonthRow.totalExpensesMinor,
+    estimatedProfitMinor: selectedMonthRow.estimatedProfitMinor,
+    changeVsPreviousMonth: selectedMonthRow.changeVsPreviousMonth,
+    salesFunnel,
+    confirmedMetaLeadsCount: selectedMonthRow.confirmedMetaLeadsCount,
+    broadMetaLeadsCount: selectedMonthRow.broadMetaLeadsCount,
+    metaAttributedLeadsCount: selectedMonthRow.metaAttributedLeadsCount,
+    primaryCplMinor: selectedMonthRow.primaryCplMinor,
+    confirmedMetaRevenueMinor: selectedMonthRow.confirmedMetaRevenueMinor,
+    confirmedMetaRoas: selectedMonthRow.confirmedMetaRoas,
+    confirmedMetaLeadsExistOverall,
+    metaAttributedWonCount,
+    revenueByService,
+    leadSources,
+    referralMetrics,
+    expenses: (businessExpensesInMonthRes.data ?? []) as BusinessReportData["expenses"],
+  };
 
   const marketingData: MarketingPerformanceData = {
     range,
@@ -319,17 +478,6 @@ export default async function DashboardPage({
     campaigns,
   };
 
-  const revenueThisMonth = (paymentsThisMonthRes.data ?? []).reduce(
-    (sum, p) => sum + p.amount,
-    0
-  );
-
-  const wonCount = wonAllTimeRes.count ?? 0;
-  const lostCount = lostAllTimeRes.count ?? 0;
-  const decidedCount = wonCount + lostCount;
-  const conversionRate =
-    decidedCount > 0 ? Math.round((wonCount / decidedCount) * 100) : null;
-
   const recentLeads = (recentLeadsRes.data ?? []) as unknown as RecentLead[];
   const upcomingFollowUps = (upcomingFollowUpsRes.data ??
     []) as unknown as UpcomingFollowUp[];
@@ -340,12 +488,12 @@ export default async function DashboardPage({
     <div>
       <PageHeader
         title="לוח בקרה"
-        description="תמונת מצב חיה של לידים, מעקבים והכנסות."
+        description="דוח עסקי חודשי, מעקבים ותמונת מצב חיה."
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         <StatCard
-          label="לידים חדשים"
+          label="לידים חדשים (ממתינים)"
           value={String(newLeadsRes.count ?? 0)}
           icon={UserPlus}
           tone="accent"
@@ -360,26 +508,10 @@ export default async function DashboardPage({
           value={String(trialsBookedRes.count ?? 0)}
           icon={Dumbbell}
         />
-        <StatCard
-          label="נסגרו החודש"
-          value={String(wonThisMonthRes.count ?? 0)}
-          icon={Trophy}
-        />
-        <StatCard
-          label="הכנסות החודש"
-          value={formatMoney(revenueThisMonth)}
-          icon={Wallet}
-        />
-        <StatCard
-          label="אחוז סגירה"
-          value={conversionRate === null ? "—" : `${conversionRate}%`}
-          icon={TrendingUp}
-          hint={
-            decidedCount === 0
-              ? "עדיין אין לידים שנסגרו או לא נסגרו"
-              : `${wonCount} נסגרו מתוך ${decidedCount} שהוכרעו`
-          }
-        />
+      </div>
+
+      <div className="mt-8">
+        <BusinessReport data={businessReportData} />
       </div>
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">

@@ -3,15 +3,18 @@
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { Repeat, Pencil, CircleOff, X } from "lucide-react";
 import {
-  updateRecurringExpenseAmount,
+  updateRecurringExpense,
   stopRecurringExpense,
-  type UpdateRecurringExpenseAmountState,
+  type UpdateRecurringExpenseState,
 } from "@/app/(app)/dashboard/actions";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatMoney } from "@/lib/crm/format";
-import { BUSINESS_EXPENSE_CATEGORY_LABELS } from "@/lib/crm/constants";
+import {
+  BUSINESS_EXPENSE_CATEGORIES,
+  BUSINESS_EXPENSE_CATEGORY_LABELS,
+} from "@/lib/crm/constants";
 import type { BusinessExpenseCategory } from "@/lib/crm/constants";
 
 export type RecurringExpenseRow = {
@@ -23,9 +26,10 @@ export type RecurringExpenseRow = {
 };
 
 const inputClass =
-  "w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-rose-400 focus:ring-2 focus:ring-rose-100 text-left";
+  "w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-rose-400 focus:ring-2 focus:ring-rose-100";
+const ltrInputClass = `${inputClass} text-left`;
 const labelClass = "text-xs font-medium text-zinc-700";
-const initialState: UpdateRecurringExpenseAmountState = { error: null };
+const initialState: UpdateRecurringExpenseState = { error: null };
 
 // "הוצאות קבועות" — separate from the month's ExpenseList (which shows
 // individual LEDGER rows, one per month, badge-only): this manages the
@@ -98,10 +102,7 @@ function RecurringExpenseListItem({
         </span>
         {isActive && (
           <div className="flex items-center gap-1.5">
-            <UpdateRecurringExpenseAmountDialog
-              recurringExpenseId={recurringExpense.id}
-              currentAmountNis={recurringExpense.amount_minor / 100}
-            />
+            <UpdateRecurringExpenseDialog recurringExpense={recurringExpense} />
             <StopRecurringExpenseButton
               recurringExpenseId={recurringExpense.id}
               label={
@@ -116,23 +117,22 @@ function RecurringExpenseListItem({
   );
 }
 
-// "שינוי סכום חודשי" — mirrors UpdateRecurringPriceDialog exactly: the
-// new amount applies starting the NEXT un-generated occurrence only.
-// Every already-generated business_expenses row keeps its own frozen
-// amount_minor — see updateRecurringExpenseAmount's own comment.
-function UpdateRecurringExpenseAmountDialog({
-  recurringExpenseId,
-  currentAmountNis,
+// "עריכת הוצאה קבועה" — full edit of the recurring DEFINITION:
+// description, category, current monthly amount. Mirrors
+// UpdateRecurringPriceDialog's core guarantee (the amount applies
+// starting the NEXT un-generated occurrence only) and extends it
+// uniformly to description/category — every already-generated
+// business_expenses row keeps its own frozen values regardless of
+// which of these three fields changes here (see updateRecurringExpense's
+// own comment for why that holds for all three, not just amount).
+function UpdateRecurringExpenseDialog({
+  recurringExpense,
 }: {
-  recurringExpenseId: string;
-  currentAmountNis: number;
+  recurringExpense: RecurringExpenseRow;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
-  const [state, formAction, isPending] = useActionState(
-    updateRecurringExpenseAmount,
-    initialState
-  );
+  const [state, formAction, isPending] = useActionState(updateRecurringExpense, initialState);
 
   useEffect(() => {
     if (state.success) {
@@ -145,7 +145,7 @@ function UpdateRecurringExpenseAmountDialog({
       <button
         type="button"
         onClick={() => dialogRef.current?.showModal()}
-        aria-label="שינוי סכום חודשי"
+        aria-label="עריכת הוצאה קבועה"
         className="flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-300 text-zinc-500 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
       >
         <Pencil className="h-3 w-3" strokeWidth={2.5} />
@@ -158,7 +158,7 @@ function UpdateRecurringExpenseAmountDialog({
       >
         <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-4">
           <div>
-            <h2 className="text-sm font-semibold text-zinc-900">שינוי סכום חודשי</h2>
+            <h2 className="text-sm font-semibold text-zinc-900">עריכת הוצאה קבועה</h2>
             <p className="mt-0.5 text-xs text-zinc-500">
               הסכום החדש יחול החל מהחודש הבא בלבד — חודשים קודמים לא ישתנו.
             </p>
@@ -173,8 +173,8 @@ function UpdateRecurringExpenseAmountDialog({
           </button>
         </div>
 
-        <form ref={formRef} action={formAction} className="px-5 py-4">
-          <input type="hidden" name="recurring_expense_id" value={recurringExpenseId} />
+        <form ref={formRef} action={formAction} className="space-y-4 px-5 py-4">
+          <input type="hidden" name="recurring_expense_id" value={recurringExpense.id} />
 
           <div className="space-y-1">
             <label htmlFor="re_monthly_amount" className={labelClass}>
@@ -188,7 +188,39 @@ function UpdateRecurringExpenseAmountDialog({
               step="1"
               required
               dir="ltr"
-              defaultValue={currentAmountNis}
+              defaultValue={recurringExpense.amount_minor / 100}
+              className={ltrInputClass}
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label htmlFor="re_category" className={labelClass}>
+              קטגוריה *
+            </label>
+            <select
+              id="re_category"
+              name="category"
+              required
+              defaultValue={recurringExpense.category}
+              className={inputClass}
+            >
+              {BUSINESS_EXPENSE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {BUSINESS_EXPENSE_CATEGORY_LABELS[c]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <label htmlFor="re_description" className={labelClass}>
+              תיאור
+            </label>
+            <textarea
+              id="re_description"
+              name="description"
+              rows={2}
+              defaultValue={recurringExpense.description ?? ""}
               className={inputClass}
             />
           </div>

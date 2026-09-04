@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { zonedWallTimeToUtcIso, ISRAEL_TIME_ZONE } from "@/lib/crm/timezone";
 
 function optionalString(value: FormDataEntryValue | null): string | null {
   const s = typeof value === "string" ? value.trim() : "";
@@ -43,8 +44,20 @@ export async function createFollowUp(
     return { error: "יש לבחור תאריך ושעה למעקב." };
   }
 
-  const dueAt = new Date(`${date}T${time}`);
-  if (Number.isNaN(dueAt.getTime())) {
+  // Gal picks a date+time meaning "10:00 my time" (Asia/Jerusalem) —
+  // never the server's own timezone (Vercel serverless functions run
+  // in UTC by default). A naive `new Date(`${date}T${time}`)` would
+  // silently interpret that as 10:00 UTC (13:00/12:00 Israel time
+  // depending on DST) — exactly the bug this must not have. See
+  // lib/crm/timezone.ts's own comment for why this needs real IANA tz
+  // data, not fixed +2/+3 arithmetic.
+  let dueAtIso: string;
+  try {
+    dueAtIso = zonedWallTimeToUtcIso(date, time, ISRAEL_TIME_ZONE);
+  } catch {
+    return { error: "התאריך או השעה שהוזנו אינם תקינים." };
+  }
+  if (Number.isNaN(new Date(dueAtIso).getTime())) {
     return { error: "התאריך או השעה שהוזנו אינם תקינים." };
   }
 
@@ -54,7 +67,7 @@ export async function createFollowUp(
     customer_id: customerId,
     title,
     notes,
-    due_at: dueAt.toISOString(),
+    due_at: dueAtIso,
     status: "PENDING",
     source: "MANUAL",
   });

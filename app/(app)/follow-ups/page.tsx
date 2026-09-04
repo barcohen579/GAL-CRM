@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FollowUpRow } from "@/components/follow-ups/follow-up-row";
-import { isSameCalendarDay } from "@/lib/crm/format";
+import { isSameZonedCalendarDay } from "@/lib/crm/timezone";
 import type { FollowUpWithRelations } from "@/lib/crm/types";
 
 export const metadata: Metadata = { title: "מעקבים — GAL CRM" };
@@ -39,12 +39,16 @@ export default async function FollowUpsPage() {
   const completed = (completedRes.data ?? []) as unknown as FollowUpWithRelations[];
 
   const now = new Date();
+  // "Today" means Israel's calendar day, not the rendering server's own
+  // (Vercel serverless functions default to UTC) — see
+  // lib/crm/timezone.ts's own comment for why this matters most right
+  // around midnight Israel time.
   const overdue = pending.filter((t) => new Date(t.due_at) < now);
   const dueToday = pending.filter(
-    (t) => new Date(t.due_at) >= now && isSameCalendarDay(new Date(t.due_at), now)
+    (t) => new Date(t.due_at) >= now && isSameZonedCalendarDay(new Date(t.due_at), now)
   );
   const upcoming = pending.filter(
-    (t) => new Date(t.due_at) >= now && !isSameCalendarDay(new Date(t.due_at), now)
+    (t) => new Date(t.due_at) >= now && !isSameZonedCalendarDay(new Date(t.due_at), now)
   );
 
   const totalOpen = pending.length;

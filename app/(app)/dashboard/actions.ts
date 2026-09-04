@@ -138,17 +138,26 @@ export async function updateExpense(
 // business_recurring_expenses instead of purchases.
 // ============================================================
 
-export type UpdateRecurringExpenseAmountState = { error: string | null; success?: boolean };
+export type UpdateRecurringExpenseState = { error: string | null; success?: boolean };
 
-// "שינוי סכום חודשי" — changes the amount used starting the NEXT
-// un-generated occurrence only. Every already-generated business_expenses
-// row already has its own amount_minor frozen (a plain column value,
-// never a live foreign lookup), so this can never rewrite a historical
-// month — exactly updateRecurringPrice's own guarantee.
-export async function updateRecurringExpenseAmount(
-  _prevState: UpdateRecurringExpenseAmountState,
+// "עריכת הוצאה קבועה" — edits the recurring DEFINITION itself
+// (description/category/current monthly amount). Only ever updates
+// business_recurring_expenses — never touches a single row of
+// business_expenses. This is exactly why editing here is always safe
+// for history: every already-generated occurrence row already has its
+// own description/category/amount_minor FROZEN as plain column values
+// at insert time (never a live foreign lookup back to this table), so
+// no field changed here can ever rewrite a historical month, whether
+// that field is the amount (affects the NEXT un-generated occurrence
+// only — the recurring-billing precedent updateRecurringPrice already
+// established) or description/category (this schema has no
+// "presentation-only" field on business_expenses at all — every column
+// is a frozen historical fact, so the same frozen-history guarantee
+// applies uniformly to all three).
+export async function updateRecurringExpense(
+  _prevState: UpdateRecurringExpenseState,
   formData: FormData
-): Promise<UpdateRecurringExpenseAmountState> {
+): Promise<UpdateRecurringExpenseState> {
   const recurringExpenseId = optionalString(formData.get("recurring_expense_id"));
   if (!recurringExpenseId) return { error: "שגיאה פנימית: ההוצאה החודשית לא זוהתה." };
 
@@ -160,14 +169,21 @@ export async function updateRecurringExpenseAmount(
   }
   const amountMinor = Math.round(amountNis * 100);
 
+  const category = optionalString(formData.get("category"));
+  if (!category || !(BUSINESS_EXPENSE_CATEGORIES as readonly string[]).includes(category)) {
+    return { error: "יש לבחור קטגוריה." };
+  }
+
+  const description = optionalString(formData.get("description"));
+
   const supabase = await createClient();
   const { error } = await supabase
     .from("business_recurring_expenses")
-    .update({ amount_minor: amountMinor })
+    .update({ amount_minor: amountMinor, category, description })
     .eq("id", recurringExpenseId);
 
   if (error) {
-    return { error: `לא הצלחנו לעדכן את הסכום החודשי: ${error.message}` };
+    return { error: `לא הצלחנו לעדכן את ההוצאה הקבועה: ${error.message}` };
   }
 
   revalidatePath("/dashboard");

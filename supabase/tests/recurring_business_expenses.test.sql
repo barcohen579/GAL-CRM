@@ -34,6 +34,7 @@ declare
   v_next_month date := (date_trunc('month', current_date) + interval '1 month')::date;
   v_three_months_ago date := (date_trunc('month', current_date) - interval '3 months')::date;
   v_two_months_ago date := (date_trunc('month', current_date) - interval '2 months')::date;
+  v_one_month_ago date := (date_trunc('month', current_date) - interval '1 month')::date;
   v_meta_count_before int;
   v_meta_count_after int;
 begin
@@ -149,24 +150,78 @@ begin
   end;
 
   -----------------------------------------------------------------
-  -- Scenario 6: future price change preserves historical amounts.
-  -- Raise v_re2's price, advance to next month's cycle — the OLD
-  -- occurrences keep their original (frozen) amount; the NEW one uses
-  -- the new price.
+  -- Scenario 6: a definition edit (amount AND description AND
+  -- category — the full "עריכת הוצאה קבועה" dialog, not just price)
+  -- affects only cycles generated AFTER the edit; every already-
+  -- generated occurrence keeps its original, frozen values.
+  --
+  -- Why this needs its own recurring expense (v_re3) rather than
+  -- reusing v_re/v_re2: generate_due_recurring_business_expenses()
+  -- deliberately backfills EVERY due month in ONE pass using ONE
+  -- snapshot of the definition (read once per call, before the loop
+  -- that may generate several months) — by design, so a single run
+  -- can never produce two different prices for two different months.
+  -- Within one test transaction current_date never advances, so the
+  -- ONLY way to observe "old definition for an earlier month, new
+  -- definition for a later one" is to manually pre-record the earlier
+  -- month directly (exactly as create_recurring_business_expense
+  -- itself does for a real first month), THEN edit the definition,
+  -- THEN let the generator fill in the remaining still-due month(s)
+  -- — which it will do using the NEW definition, since it re-reads
+  -- business_recurring_expenses fresh on this call.
   -----------------------------------------------------------------
-  update public.business_recurring_expenses set amount_minor = 15000 where id = v_re2_id; -- was 10000
-  update public.business_recurring_expenses set next_occurrence_date = v_next_month where id = v_re2_id;
-  perform public.generate_due_recurring_business_expenses();
+  declare
+    v_re3_id uuid;
+    v_re3_row record;
+  begin
+    insert into public.business_recurring_expenses (
+      description, category, amount_minor, start_date, status, next_occurrence_date
+    ) values (
+      'Original Desc', 'SOFTWARE_SUBSCRIPTIONS', 10000, v_two_months_ago, 'ACTIVE', v_two_months_ago
+    ) returning id into v_re3_id;
 
-  if (select amount_minor from public.business_expenses where recurring_expense_id = v_re2_id and occurrence_month = v_next_month) <> 15000 then
-    raise exception 'ASSERTION FAILED (Scenario 6): the new occurrence did not use the updated price';
-  end if;
-  select count(*) into v_count
-  from public.business_expenses
-  where recurring_expense_id = v_re2_id and occurrence_month < v_this_month and amount_minor <> 10000;
-  if v_count <> 0 then
-    raise exception 'ASSERTION FAILED (Scenario 6): a historical occurrence''s amount was rewritten by the price change';
-  end if;
+    -- Manually record the OLDEST due month directly (simulating "this
+    -- already happened, before the edit") — same shape
+    -- create_recurring_business_expense's own first-occurrence insert
+    -- uses, just done by hand here to control exactly which month is
+    -- pre-occupied.
+    insert into public.business_expenses (
+      expense_date, amount_minor, currency, category, description,
+      recurring_expense_id, occurrence_month, is_auto_generated
+    ) values (
+      v_two_months_ago, 10000, 'ILS', 'SOFTWARE_SUBSCRIPTIONS', 'Original Desc',
+      v_re3_id, v_two_months_ago, false
+    );
+    update public.business_recurring_expenses set next_occurrence_date = v_one_month_ago where id = v_re3_id;
+
+    -- Now edit the definition — amount, description, AND category.
+    update public.business_recurring_expenses
+    set amount_minor = 15000, description = 'Updated Desc', category = 'OTHER'
+    where id = v_re3_id;
+
+    -- Generator fills in every remaining due month (one-month-ago,
+    -- this-month) using the NEW definition.
+    perform public.generate_due_recurring_business_expenses();
+
+    -- The manually-pre-recorded, OLDER month must be completely
+    -- untouched by the later definition edit.
+    select * into v_re3_row
+    from public.business_expenses
+    where recurring_expense_id = v_re3_id and occurrence_month = v_two_months_ago;
+    if v_re3_row.amount_minor <> 10000 or v_re3_row.description <> 'Original Desc' or v_re3_row.category <> 'SOFTWARE_SUBSCRIPTIONS' then
+      raise exception 'ASSERTION FAILED (Scenario 6): the historical (pre-edit) occurrence was rewritten — amount=%, description=%, category=%',
+        v_re3_row.amount_minor, v_re3_row.description, v_re3_row.category;
+    end if;
+
+    -- The newly-generated, LATER month must use every one of the new values.
+    select * into v_re3_row
+    from public.business_expenses
+    where recurring_expense_id = v_re3_id and occurrence_month = v_one_month_ago;
+    if v_re3_row.amount_minor <> 15000 or v_re3_row.description <> 'Updated Desc' or v_re3_row.category <> 'OTHER' then
+      raise exception 'ASSERTION FAILED (Scenario 6): the post-edit occurrence did not use the updated amount/description/category — amount=%, description=%, category=%',
+        v_re3_row.amount_minor, v_re3_row.description, v_re3_row.category;
+    end if;
+  end;
 
   -----------------------------------------------------------------
   -- Scenario 7: stopping a recurring expense prevents future
@@ -222,8 +277,9 @@ begin
     );
   -- v_re contributed 300000 this month (Scenario 2, manual first
   -- occurrence); v_re2 contributed 10000 this month (Scenario 4/5
-  -- backfill, at the ORIGINAL price since the price change only
-  -- applied to next month's cycle in Scenario 6).
+  -- backfill — v_re2's own definition/amount is never edited anywhere
+  -- in this file; Scenario 6's definition-edit coverage uses a
+  -- separate v_re3, precisely so it can't perturb this total).
   if v_count <> 310000 then
     raise exception 'ASSERTION FAILED (Scenario 9): this-month recurring-expense total did not reconcile, got %', v_count;
   end if;

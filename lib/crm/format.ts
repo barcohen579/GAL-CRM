@@ -2,6 +2,17 @@
 // (agorot) — these are the only places that should ever divide by 100.
 // All locale-aware formatting uses he-IL / he so dates, numbers and
 // relative time read naturally in Hebrew.
+//
+// Every date/time formatter below renders explicitly in Asia/Jerusalem
+// — Gal's own timezone — rather than whatever timezone the rendering
+// server happens to be in (Vercel serverless functions default to
+// UTC). Without this, a payment/lead/follow-up timestamp could display
+// 2-3 hours off from what actually happened in Israel, and worse,
+// silently drift by exactly one hour across DST transitions. See
+// lib/crm/timezone.ts for the same Asia/Jerusalem convention applied
+// to follow-up scheduling and the notification cron.
+
+import { ISRAEL_TIME_ZONE } from "./timezone.ts";
 
 export function formatMoney(
   minorUnits: number,
@@ -25,6 +36,7 @@ export function formatDate(value: string | Date): string {
     day: "numeric",
     month: "short",
     year: "numeric",
+    timeZone: ISRAEL_TIME_ZONE,
   }).format(d);
 }
 
@@ -35,6 +47,20 @@ export function formatDateTime(value: string | Date): string {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: ISRAEL_TIME_ZONE,
+  }).format(d);
+}
+
+// "10:00" — used by the daily digest email (lib/notifications/) to
+// show each follow-up's time without repeating the (already-known)
+// date. Israel time, same as every other formatter in this file.
+export function formatTimeOnly(value: string | Date): string {
+  const d = typeof value === "string" ? new Date(value) : value;
+  return new Intl.DateTimeFormat("he-IL", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: ISRAEL_TIME_ZONE,
   }).format(d);
 }
 
@@ -85,10 +111,7 @@ export function endOfTodayISO(): string {
   ).toISOString();
 }
 
-export function isSameCalendarDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
+// isSameCalendarDay was removed — its one caller (app/(app)/follow-ups/
+// page.tsx) needed Israel-timezone-aware day comparison, not the
+// server's own local calendar day; see isSameZonedCalendarDay in
+// lib/crm/timezone.ts.

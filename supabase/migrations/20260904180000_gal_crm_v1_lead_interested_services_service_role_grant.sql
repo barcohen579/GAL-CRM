@@ -1,0 +1,28 @@
+-- GAL CRM — fix: service_role has no SELECT on lead_interested_services.
+--
+-- Regression surfaced by the one-time Production email smoke test (see
+-- the task this migration was written for): app/api/cron/follow-up-notifications/route.ts
+-- has, since the email-redesign deploy, embedded
+-- interested_services:lead_interested_services(service_type) in both
+-- processReminders' and processAutomaticEscalations' candidate
+-- queries — both run via createAdminClient() (service_role). This
+-- table's own migration (20260903113057_..._lead_interested_services.sql)
+-- only ever granted select/insert/delete to `authenticated` (the
+-- normal CRM-user path), never anticipating a service_role reader —
+-- so every one of those queries has been failing outright
+-- ("permission denied for table lead_interested_services") since that
+-- deploy, silently breaking the reminder/escalation email for every
+-- Lead-linked follow-up (a customer-linked one has no interested
+-- services join, so was unaffected).
+--
+-- SELECT-only, to service_role only: the cron route only ever reads
+-- this table (it never creates/edits a lead's interested services —
+-- that stays exclusively the `authenticated` CRM-user path via
+-- app/(app)/leads/actions.ts), so no INSERT/UPDATE/DELETE grant is
+-- added here. Same "RLS (is_crm_user()) is what actually restricts
+-- access, not the grant" reasoning already used everywhere else in
+-- this schema — service_role already bypasses RLS entirely by design
+-- (it is the trusted cron/service path), this GRANT is what Postgres
+-- itself additionally requires before RLS bypass is even reachable.
+
+grant select on public.lead_interested_services to service_role;

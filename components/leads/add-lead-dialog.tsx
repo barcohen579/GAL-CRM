@@ -191,19 +191,6 @@ export function AddLeadDialog({
             )}
 
             <div className="sm:col-span-2 space-y-1">
-              <label htmlFor="follow_up_at" className={labelClass}>
-                תאריך ושעת מעקב (לא חובה)
-              </label>
-              <input
-                id="follow_up_at"
-                name="follow_up_at"
-                type="datetime-local"
-                dir="ltr"
-                className={ltrInputClass}
-              />
-            </div>
-
-            <div className="sm:col-span-2 space-y-1">
               <label htmlFor="notes" className={labelClass}>
                 הערות
               </label>

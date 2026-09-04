@@ -37,7 +37,6 @@ export async function createLead(
   const channel = optionalString(formData.get("channel"));
   const referrerCustomerId = optionalString(formData.get("referrer_customer_id"));
   const notes = optionalString(formData.get("notes"));
-  const followUpAt = optionalString(formData.get("follow_up_at"));
 
   const supabase = await createClient();
 
@@ -123,18 +122,17 @@ export async function createLead(
     }
   }
 
-  if (followUpAt) {
-    const dueAtIso = new Date(followUpAt).toISOString();
-    const { error: taskError } = await supabase.from("follow_up_tasks").insert({
-      lead_id: lead.id,
-      title: `מעקב מול ${fullName}`,
-      due_at: dueAtIso,
-      source: "MANUAL",
-    });
-    if (taskError) {
-      console.error("createLead: follow-up task insert failed:", taskError.message);
-    }
-  }
+  // No manual follow-up is created here. Every new lead already gets its
+  // Day-0 AUTOMATIC follow-up from the create_automatic_followup_for_new_lead()
+  // DB trigger (see supabase/migrations/..._automatic_lead_followup_escalation.sql).
+  // This action used to also accept an optional follow-up date/time and
+  // create a second, MANUAL follow-up from it — removed as an approved
+  // product cleanup: it predated the automatic loop and, now that every
+  // lead gets one anyway, only produced a redundant MANUAL row that
+  // permanently suppressed the automatic one from the actionable UI (see
+  // lib/crm/follow-up-visibility.ts) for no benefit. A specific follow-up
+  // date/time is still available any time via "מעקב חדש" on the lead's
+  // own detail page (createFollowUp in app/(app)/follow-ups/actions.ts).
 
   revalidatePath("/leads");
   revalidatePath("/dashboard");

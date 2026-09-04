@@ -72,8 +72,9 @@ begin
   end if;
 
   -- The Day-0 task actually created above must use this same rule:
-  -- due_at, read back in Israel time, must be 09:00 on
-  -- next_eligible_follow_up_date(lead.created_at).
+  -- due_at, read back in Israel time, must be 10:00 on
+  -- next_eligible_follow_up_date(lead.created_at) — see
+  -- 20260904190000_..._automatic_followup_10am.sql (was 09:00).
   declare
     v_lead_created_at timestamptz;
     v_expected_date date;
@@ -83,8 +84,9 @@ begin
     if (v_task.due_at at time zone 'Asia/Jerusalem')::date <> v_expected_date then
       raise exception 'ASSERTION FAILED (Scenario 2): Day-0 follow-up due_at is not on the expected next eligible date';
     end if;
-    if extract(hour from (v_task.due_at at time zone 'Asia/Jerusalem')) <> 9 then
-      raise exception 'ASSERTION FAILED (Scenario 2): Day-0 follow-up is not due at 09:00 Israel time';
+    if extract(hour from (v_task.due_at at time zone 'Asia/Jerusalem')) <> 10
+      or extract(minute from (v_task.due_at at time zone 'Asia/Jerusalem')) <> 0 then
+      raise exception 'ASSERTION FAILED (Scenario 2): Day-0 follow-up is not due at 10:00 Israel time';
     end if;
   end;
 

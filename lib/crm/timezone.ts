@@ -167,3 +167,30 @@ export function nextEligibleFollowUpDay(dateKey: string): string {
   }
   return next;
 }
+
+/** The exact instant (UTC ISO string) a new Lead's Day-0 AUTOMATIC
+ *  follow-up is due: 10:00 Israel time on nextEligibleFollowUpDay of
+ *  the lead's own creation date — regardless of what time of day the
+ *  lead was actually created (a Sunday 08:00 lead and a Sunday 23:30
+ *  lead both land on Monday 10:00). Pure TS mirror of the SQL trigger
+ *  create_automatic_followup_for_new_lead() (see
+ *  supabase/migrations/20260904190000_..._automatic_followup_10am.sql)
+ *  — not called by any application code path (the DB trigger is the
+ *  actual, authoritative implementation that runs on every real lead
+ *  insert), kept here purely so this one rule has a fast, DB-free test
+ *  surface documenting exactly what the trigger is expected to do —
+ *  same "SQL mirror, TS test surface" precedent as
+ *  nextEligibleFollowUpDay/next_eligible_follow_up_date itself.
+ *  MANUAL follow-ups never go through this function — Gal's own
+ *  explicitly chosen date/time is stored exactly as given, in both the
+ *  DB (create_manual_follow_up_for_lead) and the app layer
+ *  (createFollowUp) — see this repo's own regression tests for that
+ *  guarantee. */
+export function automaticFollowUpDueAtIso(
+  leadCreatedAtIso: string,
+  timeZone: string = ISRAEL_TIME_ZONE
+): string {
+  const createdAtDateKey = zonedParts(new Date(leadCreatedAtIso), timeZone).dateKey;
+  const dueDateKey = nextEligibleFollowUpDay(createdAtDateKey);
+  return zonedWallTimeToUtcIso(dueDateKey, "10:00", timeZone);
+}

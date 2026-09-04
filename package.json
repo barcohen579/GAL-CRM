@@ -21,7 +21,8 @@
     "db:test:recurring-business-expenses": "supabase db query --linked -f supabase/tests/recurring_business_expenses.test.sql",
     "db:test:follow-up-notifications": "supabase db query --linked -f supabase/tests/follow_up_notifications.test.sql",
     "db:test:automatic-followup-escalation": "supabase db query --linked -f supabase/tests/automatic_lead_followup_escalation.test.sql",
-    "db:test:one-current-manual-follow-up": "supabase db query --linked -f supabase/tests/one_current_manual_follow_up_per_lead.test.sql"
+    "db:test:one-current-manual-follow-up": "supabase db query --linked -f supabase/tests/one_current_manual_follow_up_per_lead.test.sql",
+    "db:test:automatic-followup-10am": "supabase db query --linked -f supabase/tests/automatic_followup_10am.test.sql"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

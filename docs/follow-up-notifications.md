@@ -15,9 +15,10 @@ from Gal required:
 
 - **Day 0**: an `AFTER INSERT` trigger on `leads`
   (`create_automatic_followup_for_new_lead()`) creates ONE
-  `follow_up_tasks` row, `source = 'AUTOMATIC'`, due 09:00 Israel time
+  `follow_up_tasks` row, `source = 'AUTOMATIC'`, due 10:00 Israel time
   on the next eligible business day (see "Quiet weekend" below —
-  Thu/Fri/Sat all land on the following Sunday).
+  Thu/Fri/Sat all land on the following Sunday) — regardless of what
+  time the lead itself was created.
 - **Daily escalation**: while that follow-up stays `PENDING` and its
   lead is not WON/LOST, the cron re-sends the same "still waiting"
   reminder once per eligible Israel calendar day (Sun–Thu), via

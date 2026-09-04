@@ -10,6 +10,7 @@ import {
   isEligibleFollowUpDateKey,
   isFollowUpBusinessDay,
   nextEligibleFollowUpDay,
+  automaticFollowUpDueAtIso,
 } from "./timezone.ts";
 
 // ------------------------------------------------------------------
@@ -156,4 +157,101 @@ test("nextEligibleFollowUpDay: a lead entering Friday skips straight to Sunday",
 
 test("nextEligibleFollowUpDay: a lead entering Saturday lands on the very next day, Sunday", () => {
   assert.equal(nextEligibleFollowUpDay("2026-09-12"), "2026-09-13"); // Sat -> Sun
+});
+
+// ------------------------------------------------------------------
+// automaticFollowUpDueAtIso — "Automatic Lead Follow-Up Always at
+// 10:00 Next Eligible Day": every worked example from the task's own
+// spec, expressed as an exact instant, plus the time-of-day-doesn't-
+// matter and DST-boundary cases the spec explicitly calls for.
+// ------------------------------------------------------------------
+
+test("automaticFollowUpDueAtIso: Sunday -> Monday 10:00", () => {
+  // 2026-09-06T05:00:00Z = Sunday 08:00 IDT (matches the task's own
+  // "Sunday 08:00 Lead -> Monday 10:00" example).
+  assert.equal(
+    automaticFollowUpDueAtIso("2026-09-06T05:00:00.000Z"),
+    zonedWallTimeToUtcIso("2026-09-07", "10:00", ISRAEL_TIME_ZONE)
+  );
+});
+
+test("automaticFollowUpDueAtIso: Monday -> Tuesday 10:00", () => {
+  assert.equal(
+    automaticFollowUpDueAtIso("2026-09-07T09:00:00.000Z"), // Monday ~12:00 IDT
+    zonedWallTimeToUtcIso("2026-09-08", "10:00", ISRAEL_TIME_ZONE)
+  );
+});
+
+test("automaticFollowUpDueAtIso: Wednesday -> Thursday 10:00", () => {
+  // 2026-09-09T14:00:00Z = Wednesday 17:00 IDT (matches the task's own
+  // "Wednesday 17:00 Lead -> Thursday 10:00" example).
+  assert.equal(
+    automaticFollowUpDueAtIso("2026-09-09T14:00:00.000Z"),
+    zonedWallTimeToUtcIso("2026-09-10", "10:00", ISRAEL_TIME_ZONE)
+  );
+});
+
+test("automaticFollowUpDueAtIso: Thursday -> Sunday 10:00 (skips Friday/Saturday)", () => {
+  // 2026-09-10T06:00:00Z = Thursday 09:00 IDT (matches the task's own
+  // "Thursday 09:00 Lead -> Sunday 10:00" example).
+  assert.equal(
+    automaticFollowUpDueAtIso("2026-09-10T06:00:00.000Z"),
+    zonedWallTimeToUtcIso("2026-09-13", "10:00", ISRAEL_TIME_ZONE)
+  );
+});
+
+test("automaticFollowUpDueAtIso: Friday -> Sunday 10:00", () => {
+  assert.equal(
+    automaticFollowUpDueAtIso("2026-09-11T09:00:00.000Z"), // Friday ~12:00 IDT
+    zonedWallTimeToUtcIso("2026-09-13", "10:00", ISRAEL_TIME_ZONE)
+  );
+});
+
+test("automaticFollowUpDueAtIso: Saturday -> Sunday 10:00", () => {
+  assert.equal(
+    automaticFollowUpDueAtIso("2026-09-12T09:00:00.000Z"), // Saturday ~12:00 IDT
+    zonedWallTimeToUtcIso("2026-09-13", "10:00", ISRAEL_TIME_ZONE)
+  );
+});
+
+test("automaticFollowUpDueAtIso: a late-night lead (Sunday 23:30 Israel) still lands on the very next eligible day, 10:00 — not pushed an extra day by the late hour", () => {
+  // 2026-09-06T20:30:00Z = Sunday 23:30 IDT (matches the task's own
+  // "Sunday 23:30 Lead -> Monday 10:00" example) — the very definition
+  // of "regardless of what time it enters the CRM".
+  assert.equal(
+    automaticFollowUpDueAtIso("2026-09-06T20:30:00.000Z"),
+    zonedWallTimeToUtcIso("2026-09-07", "10:00", ISRAEL_TIME_ZONE)
+  );
+});
+
+test("automaticFollowUpDueAtIso: Thursday 22:00 Israel still resolves to Sunday 10:00, same as Thursday 09:00", () => {
+  // 2026-09-10T19:00:00Z = Thursday 22:00 IDT (matches the task's own
+  // "Thursday 22:00 Lead -> Sunday 10:00" example) — confirms
+  // time-of-day never changes which day is picked.
+  assert.equal(
+    automaticFollowUpDueAtIso("2026-09-10T19:00:00.000Z"),
+    zonedWallTimeToUtcIso("2026-09-13", "10:00", ISRAEL_TIME_ZONE)
+  );
+});
+
+test("automaticFollowUpDueAtIso: DST-safe across the actual Israel DST-end boundary (2026-10-25) — lands on IST (UTC+2), not the pre-transition IDT offset", () => {
+  // 2026-10-22T19:00:00Z = Thursday 22:00 IDT (UTC+3) -- still daylight
+  // time. Skips Friday 2026-10-23 / Saturday 2026-10-24 and lands on
+  // Sunday 2026-10-25 -- the very day Israel's clocks fall back from
+  // IDT to IST at 02:00 local. By 10:00 that day Israel is already on
+  // IST (UTC+2), so the correct UTC instant is 08:00, NOT 07:00 (which
+  // a naive "always +3" offset would wrongly produce).
+  const iso = automaticFollowUpDueAtIso("2026-10-22T19:00:00.000Z");
+  assert.equal(iso, "2026-10-25T08:00:00.000Z");
+  assert.equal(iso, zonedWallTimeToUtcIso("2026-10-25", "10:00", ISRAEL_TIME_ZONE));
+});
+
+test("automaticFollowUpDueAtIso: DST-safe across the actual Israel DST-start boundary (2026-03-27) — lands on IDT (UTC+3)", () => {
+  // 2026-03-26T10:00:00Z = Thursday ~12:00 IST (UTC+2) -- still
+  // standard time. Skips Friday 2026-03-27 (the very day Israel's
+  // clocks spring forward to IDT) / Saturday 2026-03-28 and lands on
+  // Sunday 2026-03-29, already fully in IDT (UTC+3) by 10:00 local.
+  const iso = automaticFollowUpDueAtIso("2026-03-26T10:00:00.000Z");
+  assert.equal(iso, "2026-03-29T07:00:00.000Z");
+  assert.equal(iso, zonedWallTimeToUtcIso("2026-03-29", "10:00", ISRAEL_TIME_ZONE));
 });

@@ -85,3 +85,28 @@ test("a customer-linked follow-up (leadId null) is never suppressed — AUTOMATI
   const result = filterActionableFollowUps(tasks, getInfo);
   assert.deepEqual(result.map((t) => t.id), ["cust-1"]);
 });
+
+// Regression test for a real-Production shape investigated 2026-09-04:
+// a lead ended up with its Day-0 AUTOMATIC follow-up PLUS *two* separate
+// PENDING MANUAL follow-ups — one auto-created by createLead()'s own
+// pre-existing, unrelated "optional follow-up date" field on the New
+// Lead form (app/(app)/leads/actions.ts), fired seconds after the lead
+// row (and its AUTOMATIC trigger) were created, and one created
+// afterwards by hand via the follow-ups UI. A tester mistook the first
+// MANUAL row's generic, auto-populated title for the AUTOMATIC one
+// (there is no source badge in the UI to tell them apart) and concluded
+// suppression had failed — it had not: the true AUTOMATIC row was
+// already correctly hidden, and this only proves it stays hidden with
+// more than one competing MANUAL row present too.
+test("real-world shape: one AUTOMATIC row plus TWO separate PENDING MANUAL rows for the same lead — automatic stays hidden, both manuals stay visible", () => {
+  const tasks: Task[] = [
+    { id: "automatic-day0", source: "AUTOMATIC", status: "PENDING", leadId: "lead-1" },
+    { id: "manual-from-lead-form", source: "MANUAL", status: "PENDING", leadId: "lead-1" },
+    { id: "manual-from-follow-ups-ui", source: "MANUAL", status: "PENDING", leadId: "lead-1" },
+  ];
+  const result = filterActionableFollowUps(tasks, getInfo);
+  assert.deepEqual(
+    result.map((t) => t.id).sort(),
+    ["manual-from-follow-ups-ui", "manual-from-lead-form"]
+  );
+});

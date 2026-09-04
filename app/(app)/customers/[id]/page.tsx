@@ -60,7 +60,7 @@ export default async function CustomerDetailsPage({
        ),
        purchases(id, service_type, custom_service_name, status, recurrence, agreed_price_amount, agreed_price_currency, start_date, notes, lead_id, next_billing_date,
          payments(id, amount, currency, paid_at, method, status, notes, created_at, is_auto_generated)),
-       follow_up_tasks(id, title, notes, due_at, status, completed_at, completed_note, source, created_at, updated_at)`
+       follow_up_tasks(id, title, notes, due_at, status, completed_at, completed_note, auto_closed_reason, source, created_at, updated_at)`
     )
     .eq("id", id)
     .maybeSingle();

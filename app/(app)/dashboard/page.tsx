@@ -29,6 +29,7 @@ import {
   SERVICE_TYPE_LABELS,
 } from "@/lib/crm/constants";
 import { formatDate, formatMoney, formatRelative } from "@/lib/crm/format";
+import { filterActionableFollowUps } from "@/lib/crm/follow-up-visibility";
 import {
   resolveSelectedMonth,
   currentMonthKey,
@@ -73,6 +74,7 @@ type UpcomingFollowUp = {
   id: string;
   title: string;
   due_at: string;
+  source: string;
   lead: { id: string; contact: { full_name: string } | null } | null;
   customer: { id: string; contact: { full_name: string } | null } | null;
 };
@@ -105,10 +107,9 @@ export default async function DashboardPage({
   const nowIso = new Date().toISOString();
 
   const [
-    followUpsDueRes,
+    allPendingFollowUpsRes,
     trialsBookedRes,
     recentLeadsRes,
-    upcomingFollowUpsRes,
     recentPaymentsRes,
     confirmedMetaTouchpointsRes,
     allMetaRowsRes,
@@ -125,11 +126,22 @@ export default async function DashboardPage({
     allCustomersContactMapRes,
     recurringExpensesRes,
   ] = await Promise.all([
+    // Fetches every PENDING follow-up (not just "due now" or a limited
+    // page) with the (source, lead id) each row needs, so the
+    // Automatic Lead Follow-Up Escalation Loop's actionable-visibility
+    // rule (lib/crm/follow-up-visibility.ts) can be applied correctly —
+    // it must see the FULL pending set for a lead to know whether a
+    // competing manual follow-up exists, not just whichever page/slice
+    // a narrower query happened to return. Both the "מעקבים לביצוע"
+    // stat (due now) and the "מעקבים קרובים" list (top 5 upcoming)
+    // below are derived from this single fetch.
     supabase
       .from("follow_up_tasks")
-      .select("id", { count: "exact", head: true })
+      .select(
+        "id, title, due_at, source, lead:leads(id, contact:contacts(full_name)), customer:customers(id, contact:contacts(full_name))"
+      )
       .eq("status", "PENDING")
-      .lte("due_at", nowIso),
+      .order("due_at", { ascending: true }),
     supabase
       .from("leads")
       .select("id", { count: "exact", head: true })
@@ -140,14 +152,6 @@ export default async function DashboardPage({
         "id, stage, created_at, interested_services:lead_interested_services(service_type), contact:contacts(full_name)"
       )
       .order("created_at", { ascending: false })
-      .limit(5),
-    supabase
-      .from("follow_up_tasks")
-      .select(
-        "id, title, due_at, lead:leads(id, contact:contacts(full_name)), customer:customers(id, contact:contacts(full_name))"
-      )
-      .eq("status", "PENDING")
-      .order("due_at", { ascending: true })
       .limit(5),
     supabase
       .from("payments")
@@ -441,10 +445,21 @@ export default async function DashboardPage({
   };
 
   const recentLeads = (recentLeadsRes.data ?? []) as unknown as RecentLead[];
-  const upcomingFollowUps = (upcomingFollowUpsRes.data ??
-    []) as unknown as UpcomingFollowUp[];
   const recentPayments = (recentPaymentsRes.data ??
     []) as unknown as RecentPayment[];
+
+  // Actionable-visibility rule (Automatic Lead Follow-Up Escalation
+  // Loop): a lead with an active MANUAL follow-up counts/shows only
+  // that one here, never a second, competing AUTOMATIC row for the
+  // same lead — see lib/crm/follow-up-visibility.ts. Applied against
+  // the FULL pending set fetched above, then split into the "due now"
+  // stat and the top-5 "upcoming" list.
+  const actionablePendingFollowUps = filterActionableFollowUps(
+    (allPendingFollowUpsRes.data ?? []) as unknown as UpcomingFollowUp[],
+    (t) => ({ source: t.source, status: "PENDING", leadId: t.lead?.id ?? null })
+  );
+  const followUpsDueCount = actionablePendingFollowUps.filter((t) => t.due_at <= nowIso).length;
+  const upcomingFollowUps = actionablePendingFollowUps.slice(0, 5);
 
   return (
     <div>
@@ -468,7 +483,7 @@ export default async function DashboardPage({
         />
         <StatCard
           label="מעקבים לביצוע"
-          value={String(followUpsDueRes.count ?? 0)}
+          value={String(followUpsDueCount)}
           icon={Clock}
         />
         <StatCard

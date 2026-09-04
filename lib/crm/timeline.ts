@@ -90,6 +90,10 @@ export function buildLeadTimeline(lead: LeadDetail): TimelineEvent[] {
         type: "FOLLOW_UP_CANCELLED",
         at: task.updated_at,
         title: `מעקב בוטל: ${task.title}`,
+        // Only set when the system, not Gal, auto-cancelled this
+        // follow-up because the lead reached WON/LOST — a manual
+        // "ביטול מעקב" leaves this null and shows no description here.
+        description: task.auto_closed_reason ?? undefined,
       });
     }
   }

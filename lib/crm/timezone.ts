@@ -114,3 +114,56 @@ export function isSameZonedCalendarDay(
 ): boolean {
   return zonedParts(a, timeZone).dateKey === zonedParts(b, timeZone).dateKey;
 }
+
+// ------------------------------------------------------------------
+// Follow-up business-day (quiet-weekend) semantics — Automatic Lead
+// Follow-Up Escalation Loop's explicit business rule: no lead follow-up
+// reminders, no follow-up emails, and no automatic escalation occurrence
+// is ever due on Friday or Saturday (Israel calendar day) — everything
+// that would land there defers to Sunday. Every function below is pure
+// calendar-label arithmetic on a "YYYY-MM-DD" dateKey (same convention
+// as addDaysToDateKey — a date key has no time-of-day/offset of its
+// own, so anchoring the day-of-week read on UTC midnight of that label
+// is correct and DST-irrelevant by construction), never a fixed-offset
+// guess. Converting a real instant (e.g. "now") into a dateKey still
+// goes through zonedParts, which IS DST-safe via real IANA tz data.
+// ------------------------------------------------------------------
+
+/** 0 (Sunday) .. 6 (Saturday) for a "YYYY-MM-DD" calendar-date label —
+ *  pure calendar-label arithmetic, see this section's own header. */
+export function dayOfWeekFromDateKey(dateKey: string): number {
+  return new Date(`${dateKey}T00:00:00.000Z`).getUTCDay();
+}
+
+/** Eligible days are Sunday..Thursday; Friday/Saturday are the quiet
+ *  weekend — no reminder, digest, or escalation occurrence is ever due
+ *  on them. */
+export function isEligibleFollowUpDateKey(dateKey: string): boolean {
+  const dow = dayOfWeekFromDateKey(dateKey);
+  return dow !== 5 && dow !== 6; // 5 = Friday, 6 = Saturday
+}
+
+/** Whether `instant` (default: now), read as a real Israel calendar day
+ *  via zonedParts, is an eligible follow-up business day — the single
+ *  gate every notification path (individual reminder, daily digest,
+ *  automatic escalation) checks before sending anything today. */
+export function isFollowUpBusinessDay(
+  instant: Date = new Date(),
+  timeZone: string = ISRAEL_TIME_ZONE
+): boolean {
+  return isEligibleFollowUpDateKey(zonedParts(instant, timeZone).dateKey);
+}
+
+/** The next eligible Israel calendar date strictly after `dateKey` —
+ *  "the next day, skipping Friday/Saturday". Used both for a new lead's
+ *  Day-0 -> first-automatic-follow-up date, and conceptually mirrored in
+ *  SQL by next_eligible_follow_up_date() (see the escalation migration)
+ *  for the trigger that actually creates that row. Thu -> Sun, Fri ->
+ *  Sun, Sat -> Sun, every other day -> the very next calendar day. */
+export function nextEligibleFollowUpDay(dateKey: string): string {
+  let next = addDaysToDateKey(dateKey, 1);
+  while (!isEligibleFollowUpDateKey(next)) {
+    next = addDaysToDateKey(next, 1);
+  }
+  return next;
+}

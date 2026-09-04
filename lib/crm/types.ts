@@ -58,7 +58,7 @@ export type LeadWithRelations = {
   created_at: string;
   contact: ContactSummary | null;
   touchpoints: { channel: TouchpointChannel; is_primary: boolean }[];
-  follow_up_tasks: { id: string; due_at: string; status: string }[];
+  follow_up_tasks: { id: string; due_at: string; status: string; source: string }[];
 };
 
 export type FollowUpWithRelations = {
@@ -69,7 +69,7 @@ export type FollowUpWithRelations = {
   status: "PENDING" | "COMPLETED" | "CANCELLED";
   completed_at: string | null;
   completed_note: string | null;
-  source: "MANUAL" | "AI_SUGGESTED";
+  source: "MANUAL" | "AUTOMATIC" | "AI_SUGGESTED";
   lead: { id: string; stage: LeadStage; contact: ContactSummary | null } | null;
   customer: { id: string; contact: ContactSummary | null } | null;
 };
@@ -124,7 +124,11 @@ export type FollowUpTask = {
   status: "PENDING" | "COMPLETED" | "CANCELLED";
   completed_at: string | null;
   completed_note: string | null;
-  source: "MANUAL" | "AI_SUGGESTED";
+  // Set only when the system (not Gal) auto-cancelled this follow-up
+  // because its lead reached WON/LOST — see
+  // supabase/migrations/20260904161000_..._automatic_lead_followup_escalation.sql.
+  auto_closed_reason: string | null;
+  source: "MANUAL" | "AUTOMATIC" | "AI_SUGGESTED";
   created_at: string;
   updated_at: string;
 };

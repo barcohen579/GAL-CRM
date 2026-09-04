@@ -6,6 +6,10 @@ import {
   zonedParts,
   isSameZonedCalendarDay,
   timeZoneOffsetMinutes,
+  dayOfWeekFromDateKey,
+  isEligibleFollowUpDateKey,
+  isFollowUpBusinessDay,
+  nextEligibleFollowUpDay,
 } from "./timezone.ts";
 
 // ------------------------------------------------------------------
@@ -103,4 +107,53 @@ test("isSameZonedCalendarDay: two instants that are DIFFERENT UTC days but the S
 test("isSameZonedCalendarDay: identical instants are always the same day", () => {
   const d = new Date();
   assert.equal(isSameZonedCalendarDay(d, d, ISRAEL_TIME_ZONE), true);
+});
+
+// ------------------------------------------------------------------
+// Follow-up quiet-weekend semantics (§2/§11 of the escalation spec):
+// no reminder/digest/escalation is ever due on Friday or Saturday.
+// ------------------------------------------------------------------
+
+test("dayOfWeekFromDateKey: known dates map to the correct day of week", () => {
+  assert.equal(dayOfWeekFromDateKey("2026-09-06"), 0); // Sunday
+  assert.equal(dayOfWeekFromDateKey("2026-09-07"), 1); // Monday
+  assert.equal(dayOfWeekFromDateKey("2026-09-10"), 4); // Thursday
+  assert.equal(dayOfWeekFromDateKey("2026-09-11"), 5); // Friday
+  assert.equal(dayOfWeekFromDateKey("2026-09-12"), 6); // Saturday
+});
+
+test("isEligibleFollowUpDateKey: Sunday..Thursday are eligible, Friday/Saturday are not", () => {
+  assert.equal(isEligibleFollowUpDateKey("2026-09-06"), true); // Sun
+  assert.equal(isEligibleFollowUpDateKey("2026-09-07"), true); // Mon
+  assert.equal(isEligibleFollowUpDateKey("2026-09-08"), true); // Tue
+  assert.equal(isEligibleFollowUpDateKey("2026-09-09"), true); // Wed
+  assert.equal(isEligibleFollowUpDateKey("2026-09-10"), true); // Thu
+  assert.equal(isEligibleFollowUpDateKey("2026-09-11"), false); // Fri
+  assert.equal(isEligibleFollowUpDateKey("2026-09-12"), false); // Sat
+});
+
+test("isFollowUpBusinessDay: reads the real Israel calendar day of an instant, not the server's own", () => {
+  // 2026-09-11T21:30:00Z = 2026-09-12 00:30 IDT (already Saturday in Israel).
+  assert.equal(isFollowUpBusinessDay(new Date("2026-09-11T21:30:00.000Z"), ISRAEL_TIME_ZONE), false);
+  // 2026-09-13T21:30:00Z = 2026-09-14 00:30 IDT (already Monday in Israel).
+  assert.equal(isFollowUpBusinessDay(new Date("2026-09-13T21:30:00.000Z"), ISRAEL_TIME_ZONE), true);
+});
+
+test("nextEligibleFollowUpDay: a lead entering Sunday..Wednesday gets the very next day", () => {
+  assert.equal(nextEligibleFollowUpDay("2026-09-06"), "2026-09-07"); // Sun -> Mon
+  assert.equal(nextEligibleFollowUpDay("2026-09-07"), "2026-09-08"); // Mon -> Tue
+  assert.equal(nextEligibleFollowUpDay("2026-09-08"), "2026-09-09"); // Tue -> Wed
+  assert.equal(nextEligibleFollowUpDay("2026-09-09"), "2026-09-10"); // Wed -> Thu
+});
+
+test("nextEligibleFollowUpDay: a lead entering Thursday skips Friday, lands Sunday", () => {
+  assert.equal(nextEligibleFollowUpDay("2026-09-10"), "2026-09-13"); // Thu -> Sun
+});
+
+test("nextEligibleFollowUpDay: a lead entering Friday skips straight to Sunday", () => {
+  assert.equal(nextEligibleFollowUpDay("2026-09-11"), "2026-09-13"); // Fri -> Sun
+});
+
+test("nextEligibleFollowUpDay: a lead entering Saturday lands on the very next day, Sunday", () => {
+  assert.equal(nextEligibleFollowUpDay("2026-09-12"), "2026-09-13"); // Sat -> Sun
 });

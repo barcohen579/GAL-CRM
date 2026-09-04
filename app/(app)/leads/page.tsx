@@ -28,7 +28,7 @@ export default async function LeadsPage({
          interested_services:lead_interested_services(service_type),
          contact:contacts(id, full_name, phone, email, instagram_username),
          touchpoints(channel, is_primary),
-         follow_up_tasks(id, due_at, status)`
+         follow_up_tasks(id, due_at, status, source)`
       )
       .order("created_at", { ascending: false }),
     // For the "הופנתה על ידי" referrer picker (Add Lead, when source =

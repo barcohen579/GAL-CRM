@@ -10,9 +10,17 @@ import type { EmailSendResult } from "./email-provider.ts";
 
 export type FollowUpTaskStatus = "PENDING" | "COMPLETED" | "CANCELLED";
 export type ReminderDeliveryStatus = "PENDING" | "SENDING" | "SENT" | "FAILED";
+export type FollowUpTaskSource = "MANUAL" | "AUTOMATIC" | "AI_SUGGESTED";
 
 export type ReminderEligibilityInput = {
   taskStatus: FollowUpTaskStatus;
+  /** AUTOMATIC-sourced follow-ups never go through this one-shot path —
+   *  see isAutomaticEscalationEligible below for their own, repeating
+   *  eligibility rule. Keeping the exclusion here (not just as a query
+   *  filter in the route) makes it a directly testable rule like every
+   *  other one in this function, and a second, independent guard on top
+   *  of the query filter. */
+  taskSource: FollowUpTaskSource;
   /** ISO timestamp — the follow-up's own due_at. */
   dueAtIso: string;
   deliveryStatus: ReminderDeliveryStatus;
@@ -51,6 +59,7 @@ export function isReminderEligible(
   config: ReminderEligibilityConfig
 ): boolean {
   if (input.taskStatus !== "PENDING") return false;
+  if (input.taskSource === "AUTOMATIC") return false;
   if (new Date(input.dueAtIso).getTime() > now.getTime()) return false;
 
   switch (input.deliveryStatus) {
@@ -100,4 +109,75 @@ export function deliveryUpdateForSendResult(
     };
   }
   return { status: "FAILED", last_error: result.error };
+}
+
+// ------------------------------------------------------------------
+// Automatic new-lead follow-up escalation (Automatic Lead Follow-Up
+// Escalation Loop) — a REPEATING notification, unlike the one-shot
+// individual reminder above: the same AUTOMATIC follow_up_tasks row
+// (created once, at lead-creation time, by the
+// create_automatic_followup_for_new_lead() trigger) can generate a
+// fresh "still waiting" email once per eligible Israel calendar day,
+// for as long as the lead is unresolved. The actual "never twice for
+// the same lead/task + Israel day" guarantee is a DB unique constraint
+// (follow_up_task_id, escalation_date) on lead_auto_escalation_deliveries
+// — this function only decides whether the attempt is even worth
+// making (so the route can skip a DB round-trip for obviously
+// ineligible candidates), same "pure decision, DB enforces the actual
+// dedupe" split as isReminderEligible/the reminder-deliveries claim.
+// ------------------------------------------------------------------
+
+export type LeadStageForEscalation = string; // "WON" | "LOST" | any other lead_stage value
+
+export type EscalationEligibilityInput = {
+  taskStatus: FollowUpTaskStatus;
+  taskSource: FollowUpTaskSource;
+  /** ISO timestamp — the automatic follow-up's own due_at (its Day-0
+   *  target date). */
+  dueAtIso: string;
+  leadStage: LeadStageForEscalation;
+  /** True when this lead has ANY OTHER still-PENDING follow-up whose
+   *  source is NOT AUTOMATIC (i.e. a manually scheduled one) — per the
+   *  spec's §6 "manual follow-ups take priority": a manual follow-up
+   *  suspends the automatic daily escalation entirely while it exists,
+   *  with no separate stored "suspended" state needed — this is simply
+   *  re-checked live on every cron tick, so escalation resumes on its
+   *  own the moment the manual one is completed/cancelled (still no
+   *  WON/LOST, still PENDING here), with no backdating. */
+  hasCompetingManualFollowUp: boolean;
+};
+
+/** Whether an automatic escalation attempt for this follow-up is worth
+ *  making right now, given `now` and whether `now`'s real Israel
+ *  calendar day is an eligible one (caller computes that once per cron
+ *  tick via isFollowUpBusinessDay — a single fact for the whole run,
+ *  not per-candidate, so it is injected rather than recomputed here).
+ *  Every rule maps 1:1 to a spec requirement:
+ *   - only a still-PENDING, AUTOMATIC-sourced task is ever considered
+ *     (a MANUAL/AI_SUGGESTED task never enters this path; a COMPLETED/
+ *     CANCELLED one — including one auto-cancelled by WON/LOST — is
+ *     never eligible again, regardless of source).
+ *   - WON/LOST always stops the loop (belt-and-suspenders: the
+ *     authoritative stop is the transactional auto-cancel in
+ *     change_lead_stage()/convert_lead_to_won(), which flips the task
+ *     to CANCELLED and already fails the status check above — this is
+ *     a second, independently testable guard against a stale read).
+ *   - a future due_at (Day-0 hasn't arrived yet) is never eligible.
+ *   - Friday/Saturday never generate an occurrence — the caller-
+ *     supplied `isBusinessDayToday` is the single source of truth for
+ *     that, matching this repo's "inject now, never read it internally"
+ *     convention.
+ *   - a competing manual follow-up suspends escalation entirely. */
+export function isAutomaticEscalationEligible(
+  input: EscalationEligibilityInput,
+  now: Date,
+  isBusinessDayToday: boolean
+): boolean {
+  if (input.taskStatus !== "PENDING") return false;
+  if (input.taskSource !== "AUTOMATIC") return false;
+  if (input.leadStage === "WON" || input.leadStage === "LOST") return false;
+  if (new Date(input.dueAtIso).getTime() > now.getTime()) return false;
+  if (!isBusinessDayToday) return false;
+  if (input.hasCompetingManualFollowUp) return false;
+  return true;
 }

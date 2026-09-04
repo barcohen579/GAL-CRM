@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isReminderEligible, deliveryUpdateForSendResult } from "./reminder-logic.ts";
+import {
+  isReminderEligible,
+  deliveryUpdateForSendResult,
+  isAutomaticEscalationEligible,
+} from "./reminder-logic.ts";
 
 const NOW = new Date("2026-09-10T10:00:00.000Z");
 const CONFIG = { maxAttempts: 5, backoffMinutes: 30 };
@@ -8,6 +12,7 @@ const CONFIG = { maxAttempts: 5, backoffMinutes: 30 };
 function base(overrides: Partial<Parameters<typeof isReminderEligible>[0]> = {}) {
   return {
     taskStatus: "PENDING" as const,
+    taskSource: "MANUAL" as const,
     dueAtIso: "2026-09-10T09:00:00.000Z", // already due
     deliveryStatus: "PENDING" as const,
     attemptCount: 0,
@@ -81,6 +86,69 @@ test("a FAILED delivery that already exhausted maxAttempts is never retried agai
 test("a FAILED delivery that has never actually been attempted (defensive: null lastAttemptedAtIso) is eligible", () => {
   const input = base({ deliveryStatus: "FAILED", attemptCount: 0, lastAttemptedAtIso: null });
   assert.equal(isReminderEligible(input, NOW, CONFIG), true);
+});
+
+test("an AUTOMATIC-sourced follow-up is never eligible for the one-shot reminder, even if otherwise due — it uses its own repeating escalation path", () => {
+  const input = base({ taskSource: "AUTOMATIC" });
+  assert.equal(isReminderEligible(input, NOW, CONFIG), false);
+});
+
+// ------------------------------------------------------------------
+// isAutomaticEscalationEligible — the repeating daily-escalation rule.
+// ------------------------------------------------------------------
+
+function escalationBase(overrides: Partial<Parameters<typeof isAutomaticEscalationEligible>[0]> = {}) {
+  return {
+    taskStatus: "PENDING" as const,
+    taskSource: "AUTOMATIC" as const,
+    dueAtIso: "2026-09-10T06:00:00.000Z", // already due
+    leadStage: "NEW",
+    hasCompetingManualFollowUp: false,
+    ...overrides,
+  };
+}
+
+test("a due, PENDING, AUTOMATIC follow-up on an eligible business day IS eligible for escalation", () => {
+  assert.equal(isAutomaticEscalationEligible(escalationBase(), NOW, true), true);
+});
+
+test("escalation is never eligible on a non-business day (Friday/Saturday), regardless of due_at", () => {
+  assert.equal(isAutomaticEscalationEligible(escalationBase(), NOW, false), false);
+});
+
+test("a MANUAL-sourced task never enters the escalation path", () => {
+  const input = escalationBase({ taskSource: "MANUAL" });
+  assert.equal(isAutomaticEscalationEligible(input, NOW, true), false);
+});
+
+test("a COMPLETED or CANCELLED automatic task is never eligible again", () => {
+  assert.equal(isAutomaticEscalationEligible(escalationBase({ taskStatus: "COMPLETED" }), NOW, true), false);
+  assert.equal(isAutomaticEscalationEligible(escalationBase({ taskStatus: "CANCELLED" }), NOW, true), false);
+});
+
+test("a WON lead's automatic follow-up is never eligible (belt-and-suspenders on top of the DB auto-cancel)", () => {
+  const input = escalationBase({ leadStage: "WON" });
+  assert.equal(isAutomaticEscalationEligible(input, NOW, true), false);
+});
+
+test("a LOST lead's automatic follow-up is never eligible", () => {
+  const input = escalationBase({ leadStage: "LOST" });
+  assert.equal(isAutomaticEscalationEligible(input, NOW, true), false);
+});
+
+test("a future Day-0 due_at is not yet eligible", () => {
+  const input = escalationBase({ dueAtIso: "2026-09-10T11:00:00.000Z" }); // 1h from now
+  assert.equal(isAutomaticEscalationEligible(input, NOW, true), false);
+});
+
+test("a competing manual follow-up on the same lead suspends the automatic escalation entirely", () => {
+  const input = escalationBase({ hasCompetingManualFollowUp: true });
+  assert.equal(isAutomaticEscalationEligible(input, NOW, true), false);
+});
+
+test("a lead still INTERESTED (not WON/LOST) keeps its automatic escalation eligible — ordinary stage progression never stops the loop on its own", () => {
+  const input = escalationBase({ leadStage: "INTERESTED" });
+  assert.equal(isAutomaticEscalationEligible(input, NOW, true), true);
 });
 
 // ------------------------------------------------------------------

@@ -6,15 +6,21 @@ import {
   TOUCHPOINT_CHANNEL_LABELS,
 } from "@/lib/crm/constants";
 import { formatDate, formatRelative } from "@/lib/crm/format";
+import { filterActionableFollowUps } from "@/lib/crm/follow-up-visibility";
 import { LeadStageControl } from "./lead-stage-control";
 
 export function LeadCard({ lead }: { lead: LeadWithRelations }) {
   const primaryTouchpoint =
     lead.touchpoints.find((t) => t.is_primary) ?? lead.touchpoints[0];
 
-  const nextFollowUp = lead.follow_up_tasks
-    .filter((t) => t.status === "PENDING")
-    .sort((a, b) => a.due_at.localeCompare(b.due_at))[0];
+  // Actionable-visibility rule: don't show this lead's AUTOMATIC
+  // follow-up's date here while an active MANUAL one already exists for
+  // it — same rule as /follow-ups and the dashboard, see
+  // lib/crm/follow-up-visibility.ts.
+  const nextFollowUp = filterActionableFollowUps(
+    lead.follow_up_tasks.filter((t) => t.status === "PENDING"),
+    (t) => ({ source: t.source, status: t.status, leadId: lead.id })
+  ).sort((a, b) => a.due_at.localeCompare(b.due_at))[0];
 
   const overdue = nextFollowUp ? new Date(nextFollowUp.due_at) < new Date() : false;
   const contactName = lead.contact?.full_name ?? "איש קשר לא ידוע";

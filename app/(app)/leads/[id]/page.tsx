@@ -11,6 +11,7 @@ import { CreateFollowUpDialog } from "@/components/follow-ups/create-follow-up-d
 import { FollowUpTaskActions } from "@/components/follow-ups/follow-up-task-actions";
 import { Timeline } from "@/components/leads/timeline";
 import { buildLeadTimeline } from "@/lib/crm/timeline";
+import { filterActionableFollowUps } from "@/lib/crm/follow-up-visibility";
 import {
   SERVICE_TYPE_LABELS,
   TOUCHPOINT_CHANNEL_LABELS,
@@ -50,7 +51,7 @@ export default async function LeadDetailsPage({
          )
        ),
        touchpoints(id, channel, certainty, source_detail, is_primary, occurred_at, created_at),
-       follow_up_tasks(id, title, notes, due_at, status, completed_at, completed_note, source, created_at, updated_at),
+       follow_up_tasks(id, title, notes, due_at, status, completed_at, completed_note, auto_closed_reason, source, created_at, updated_at),
        stage_events:lead_stage_events(id, from_stage, to_stage, changed_at, note)`
     )
     .eq("id", id)
@@ -63,9 +64,15 @@ export default async function LeadDetailsPage({
   const lead = data as unknown as LeadDetail;
   const timeline = buildLeadTimeline(lead);
 
-  const pendingFollowUps = lead.follow_up_tasks
-    .filter((t) => t.status === "PENDING")
-    .sort((a, b) => a.due_at.localeCompare(b.due_at));
+  // Actionable-visibility rule: while this lead has an active MANUAL
+  // follow-up, its own AUTOMATIC one (if any) is not shown as a second
+  // actionable item here either — same rule as /follow-ups and the
+  // dashboard, see lib/crm/follow-up-visibility.ts. Every entry here
+  // already belongs to this one lead, so leadId is simply constant.
+  const pendingFollowUps = filterActionableFollowUps(
+    lead.follow_up_tasks.filter((t) => t.status === "PENDING"),
+    (t) => ({ source: t.source, status: t.status, leadId: lead.id })
+  ).sort((a, b) => a.due_at.localeCompare(b.due_at));
   const nextFollowUp = pendingFollowUps[0];
   const pastFollowUps = lead.follow_up_tasks
     .filter((t) => t.status !== "PENDING")

@@ -1,9 +1,82 @@
 # Follow-up notifications — architecture & manual setup
 
-Emails Gal an individual reminder when a follow-up comes due, plus a
-once-per-day morning digest of that day's pending follow-ups. Internal
-reminders only — no WhatsApp/SMS, no messages sent to leads/customers
-(see the task's own explicit scope boundary).
+Emails Gal an individual reminder when a follow-up comes due, a
+once-per-day morning digest of that day's pending follow-ups, and —
+since the Automatic Lead Follow-Up Escalation Loop — a repeating daily
+escalation reminder for any new lead that still hasn't been followed
+up. Internal reminders only — no WhatsApp/SMS, no messages sent to
+leads/customers (see the task's own explicit scope boundary).
+
+## Automatic Lead Follow-Up Escalation Loop
+
+Every NEW lead — created manually in the CRM or automatically via Meta
+Lead Ads ingestion — gets a follow-up automatically, with no action
+from Gal required:
+
+- **Day 0**: an `AFTER INSERT` trigger on `leads`
+  (`create_automatic_followup_for_new_lead()`) creates ONE
+  `follow_up_tasks` row, `source = 'AUTOMATIC'`, due 09:00 Israel time
+  on the next eligible business day (see "Quiet weekend" below —
+  Thu/Fri/Sat all land on the following Sunday).
+- **Daily escalation**: while that follow-up stays `PENDING` and its
+  lead is not WON/LOST, the cron re-sends the same "still waiting"
+  reminder once per eligible Israel calendar day (Sun–Thu), via
+  `processAutomaticEscalations()` — a REPEATING notification, unlike
+  the one-shot individual reminder below. The DB-level guarantee
+  against ever sending it twice the same day is
+  `lead_auto_escalation_deliveries`' own `UNIQUE (follow_up_task_id,
+  escalation_date)` constraint; `lib/notifications/reminder-logic.ts`'s
+  `isAutomaticEscalationEligible` is the pure, independently-tested
+  decision rule for whether an attempt is even worth making.
+- **A manual follow-up takes priority**: if the lead has ANY other
+  still-`PENDING` follow-up (source ≠ `AUTOMATIC`), the automatic
+  escalation is silently suspended for as long as that manual one
+  exists — no stored "suspended" flag, just a live per-tick check
+  (`hasCompetingManualFollowUp`), so it resumes on its own the moment
+  the manual one is completed/cancelled (still unresolved, no backdate).
+- **WON/LOST stops the loop** — see "WON/LOST auto-closes pending
+  follow-ups" below; this applies to AUTOMATIC and MANUAL follow-ups
+  alike.
+- **Gal completing/cancelling the automatic follow-up herself** also
+  stops it (its `status` leaves `PENDING`) — it does not recreate
+  another one.
+
+## Quiet weekend (Friday/Saturday)
+
+No individual reminder, no daily digest, and no automatic-escalation
+occurrence is ever generated on Friday or Saturday (real Israel
+calendar day, DST-safe via `lib/crm/timezone.ts`'s
+`isFollowUpBusinessDay`). Nothing that would land there is "moved" via
+separate bookkeeping — each job just re-checks `isFollowUpBusinessDay`
+at the top of its own run and skips entirely when it's Friday/Saturday;
+since `due_at <= now` stays true once real Israel time crosses into
+Sunday, the very next eligible-day cron tick picks it up naturally, at
+most once for that Sunday (never a Friday-then-Saturday-then-Sunday
+pile-up — a skip, not a backlog). `nextEligibleFollowUpDay`/
+`next_eligible_follow_up_date` (TS and SQL mirrors of the same rule)
+compute a NEW lead's first eligible day the same way.
+
+## WON/LOST auto-closes pending follow-ups
+
+`change_lead_stage()` and `convert_lead_to_won()` — the only two
+authoritative paths that can ever set `leads.stage` — now also cancel,
+in the SAME transaction as the stage change, every still-`PENDING`
+`follow_up_tasks` row belonging to that lead (any source). This is what
+keeps "lead → WON/LOST" and "pending follow-ups → no longer
+actionable" from ever getting out of sync, and it fixes every consumer
+(`/follow-ups`, the dashboard's pending/overdue counts, the digest,
+both cron reminder paths) with zero query changes anywhere else — they
+already filter on `follow_up_tasks.status = 'PENDING'` alone, with no
+`leads.stage` join.
+
+History is preserved, never deleted: the row becomes `CANCELLED` (not
+`COMPLETED` — Gal didn't actually carry it out, the need for it just
+evaporated), `completed_at` stays `null` (existing check constraint),
+and `auto_closed_reason` records why (`"...WON — המעקב בוטל אוטומטית"`
+/ `"...LOST — המעקב בוטל אוטומטית"`) — distinct from `completed_note`
+(Gal's own words) and from the task's own `notes`. It still shows in a
+lead's activity timeline (`lib/crm/timeline.ts`), with that reason as
+its description.
 
 ## Architecture
 
@@ -68,6 +141,41 @@ Neither table has any RLS policy for `authenticated` — both are pure
 server-automation state, touched only by the cron's `service_role`
 client. `follow_up_tasks` itself, and its create/complete/cancel Server
 Actions, are completely unchanged by this migration.
+
+Migrations `20260904160000_..._follow_up_task_source_automatic.sql` /
+`20260904161000_..._automatic_lead_followup_escalation.sql` (Automatic
+Lead Follow-Up Escalation Loop) add:
+
+- **`task_source.AUTOMATIC`** — a new enum value (its own migration
+  file: Postgres cannot use a new enum label inside the same
+  transaction that added it).
+- **`follow_up_tasks.auto_closed_reason`** — nullable, set only by the
+  automatic WON/LOST auto-cancel (see above).
+- **`follow_up_tasks_one_automatic_per_lead`** — partial unique index
+  (`lead_id` where `source = 'AUTOMATIC'`): at most one automatic
+  follow-up per lead, ever, DB-enforced.
+- **`next_eligible_follow_up_date(timestamptz) -> date`** — SQL mirror
+  of `lib/crm/timezone.ts`'s `nextEligibleFollowUpDay`, used by the
+  Day-0 trigger below.
+- **`create_automatic_followup_for_new_lead()`** — `AFTER INSERT`
+  trigger on `leads` (SECURITY DEFINER, same reasoning as
+  `create_follow_up_reminder_delivery`): creates the Day-0 AUTOMATIC
+  follow-up for every new lead, any source.
+- **`lead_auto_escalation_deliveries`** — the REPEATING escalation's own
+  delivery ledger, one row per `(follow_up_task_id, escalation_date)`,
+  `UNIQUE` on that pair — see "Automatic Lead Follow-Up Escalation
+  Loop" above. Same "zero RLS policy for `authenticated`,
+  `service_role`-only" pattern as the two tables above it.
+
+A separate, one-time, explicitly-approved data migration
+(`20260904162000_..._followup_escalation_production_backfill.sql`)
+enrolled the small number of pre-existing NEW-stage leads, restored the
+`follow_up_reminder_deliveries` invariant for follow-ups created before
+that trigger existed, and cancelled the handful of stale PENDING
+follow-ups already sitting on WON leads — see that migration's own
+header for the exact counts and reasoning. It does not, and structurally
+cannot, send any email by itself (a migration never calls the email
+provider or invokes the cron route).
 
 ## Cron schedule and its real timing precision
 
@@ -192,7 +300,11 @@ the setup above.
 Fires once per follow-up, the first time a cron tick observes it as
 due (`due_at <= now`), still `status = 'PENDING'` on the task itself
 (a completed or cancelled follow-up is never emailed, regardless of
-its delivery row's own state), and not yet successfully delivered.
+its delivery row's own state), not yet successfully delivered, on an
+eligible Israel calendar day (Sun–Thu — see "Quiet weekend" above), and
+`source ≠ 'AUTOMATIC'` (an automatic follow-up uses its own repeating
+escalation path instead — see "Automatic Lead Follow-Up Escalation
+Loop" above; this is a one-shot notification, MANUAL follow-ups only).
 Contains: the contact's name, the follow-up's own title/notes (written
 by Gal herself — nothing else about the contact), the scheduled
 date/time in Israel time, and a direct link to the Lead or Customer
@@ -221,6 +333,13 @@ the same day never re-checks it.
   own "no complicated notification center yet").
 - **Daily digest**: same 5-attempt/`claim_daily_digest_send` bound, keyed
   by calendar date instead of by task.
+- **Automatic escalation**: same 5-attempt/30-minute-backoff bound as
+  individual reminders, but keyed by `(follow_up_task_id,
+  escalation_date)` instead of by task alone — a FAILED occurrence for
+  TODAY can be retried later today (within the backoff window); a new
+  Israel calendar day always gets its own fresh row, never a reused one
+  (history is never overwritten — see `lead_auto_escalation_deliveries`
+  above).
 - **Concurrency**: both claim mechanisms are single atomic SQL
   statements (`UPDATE ... WHERE ... RETURNING` / `INSERT ... ON
   CONFLICT ... WHERE ... RETURNING`) — two overlapping cron

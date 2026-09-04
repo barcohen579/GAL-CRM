@@ -41,12 +41,14 @@ import {
 import {
   isReminderEligible,
   deliveryUpdateForSendResult,
+  isAutomaticEscalationEligible,
 } from "../../../../lib/notifications/reminder-logic.ts";
 import {
   ISRAEL_TIME_ZONE,
   zonedParts,
   zonedWallTimeToUtcIso,
   addDaysToDateKey,
+  isFollowUpBusinessDay,
 } from "../../../../lib/crm/timezone.ts";
 import { formatDate, formatTimeOnly } from "../../../../lib/crm/format.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -75,7 +77,8 @@ type ReminderTaskRow = {
   notes: string | null;
   due_at: string;
   status: "PENDING" | "COMPLETED" | "CANCELLED";
-  lead: { id: string; contact: { full_name: string } | null } | null;
+  source?: "MANUAL" | "AUTOMATIC" | "AI_SUGGESTED";
+  lead: { id: string; stage?: string; contact: { full_name: string } | null } | null;
   customer: { id: string; contact: { full_name: string } | null } | null;
 };
 
@@ -121,6 +124,19 @@ async function markDeliveryFailed(
 async function processReminders(supabase: SupabaseClient) {
   const now = new Date();
 
+  // Quiet-weekend rule (§2/§11): no individual reminder email is ever
+  // due on Friday/Saturday (real Israel calendar day, DST-safe via
+  // isFollowUpBusinessDay). A due_at that landed on Fri/Sat simply
+  // stays PENDING/un-delivered — due_at <= now stays true once real
+  // Israel time crosses into Sunday, so the very next eligible-day tick
+  // sends it then, with no separate "defer" bookkeeping needed. A
+  // single top-of-function gate (today's day-of-week is one fact for
+  // the whole run, not per-candidate) mirrors processDailyDigest's own
+  // existing early-return-on-gate pattern below.
+  if (!isFollowUpBusinessDay(now, ISRAEL_TIME_ZONE)) {
+    return { attempted: 0, sent: 0, failed: 0, skipped: "weekend_quiet_day" };
+  }
+
   let appBaseUrl: string;
   let recipient: string;
   try {
@@ -140,7 +156,7 @@ async function processReminders(supabase: SupabaseClient) {
     .select(
       `id, status, attempt_count, last_attempted_at,
        follow_up_task:follow_up_tasks(
-         id, title, notes, due_at, status,
+         id, title, notes, due_at, status, source,
          lead:leads(id, contact:contacts(full_name)),
          customer:customers(id, contact:contacts(full_name))
        )`
@@ -167,6 +183,7 @@ async function processReminders(supabase: SupabaseClient) {
     const eligible = isReminderEligible(
       {
         taskStatus: task.status,
+        taskSource: task.source ?? "MANUAL",
         dueAtIso: task.due_at,
         deliveryStatus: row.status,
         attemptCount: row.attempt_count,
@@ -243,7 +260,19 @@ async function processReminders(supabase: SupabaseClient) {
 }
 
 async function processDailyDigest(supabase: SupabaseClient) {
-  const nowParts = zonedParts(new Date(), ISRAEL_TIME_ZONE);
+  const now = new Date();
+  const nowParts = zonedParts(now, ISRAEL_TIME_ZONE);
+
+  // Quiet-weekend rule (§2/§8): no digest Friday, no digest Saturday —
+  // checked BEFORE the hour gate so a Friday/Saturday tick never even
+  // reaches "is it past 08:00 yet". Does not create a
+  // daily_digest_deliveries row for that date at all (nothing to claim
+  // or mark SKIPPED_EMPTY over — there was never a decision to make),
+  // and Sunday's own digest still only covers Sunday's own due items
+  // (see processDailyDigest's query below), never a Fri/Sat backlog.
+  if (!isFollowUpBusinessDay(now, ISRAEL_TIME_ZONE)) {
+    return { skipped: "weekend_quiet_day", digestDate: nowParts.dateKey };
+  }
 
   if (nowParts.hour < DIGEST_HOUR_THRESHOLD) {
     return { skipped: "too_early", israelHour: nowParts.hour };
@@ -369,6 +398,228 @@ async function processDailyDigest(supabase: SupabaseClient) {
   }
 }
 
+// ------------------------------------------------------------------
+// Automatic new-lead follow-up escalation (Automatic Lead Follow-Up
+// Escalation Loop). Unlike processReminders above (one-shot, one
+// delivery row per task, EVER), this re-sends the same "still waiting"
+// email once per eligible Israel calendar day, for as long as the
+// lead's AUTOMATIC follow-up (created once, at lead-creation time, by
+// the create_automatic_followup_for_new_lead() DB trigger) stays
+// PENDING. The actual "never twice for the same lead + day" guarantee
+// is lead_auto_escalation_deliveries' own UNIQUE (follow_up_task_id,
+// escalation_date) constraint (INSERT ... ON CONFLICT DO NOTHING is the
+// atomic claim); isAutomaticEscalationEligible is a second,
+// independently-testable guard that also skips an unnecessary DB round
+// trip for obviously-ineligible candidates (wrong day, WON/LOST,
+// suspended by a competing manual follow-up, not due yet).
+// ------------------------------------------------------------------
+
+type EscalationTaskRow = {
+  id: string;
+  title: string;
+  notes: string | null;
+  due_at: string;
+  status: "PENDING" | "COMPLETED" | "CANCELLED";
+  source: "MANUAL" | "AUTOMATIC" | "AI_SUGGESTED";
+  lead: { id: string; stage: string; contact: { full_name: string } | null } | null;
+};
+
+async function processAutomaticEscalations(supabase: SupabaseClient) {
+  const now = new Date();
+  const nowParts = zonedParts(now, ISRAEL_TIME_ZONE);
+  const isBusinessDayToday = isFollowUpBusinessDay(now, ISRAEL_TIME_ZONE);
+
+  // Same quiet-weekend gate as the other two jobs — checked once,
+  // up front, rather than per-candidate (today's day-of-week is one
+  // fact for the whole run). Still computed and passed into
+  // isAutomaticEscalationEligible below too, purely so that function
+  // stays the single source of truth for the full eligibility rule
+  // (this early return is an optimization, not a second rule).
+  if (!isBusinessDayToday) {
+    return { attempted: 0, sent: 0, failed: 0, skipped: "weekend_quiet_day" };
+  }
+
+  let appBaseUrl: string;
+  let recipient: string;
+  try {
+    appBaseUrl = getAppBaseUrl();
+    recipient = getGalNotificationEmail();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Notification config missing";
+    console.error(JSON.stringify({ step: "auto_escalation_config_error", message }));
+    return { attempted: 0, sent: 0, failed: 0, configError: message };
+  }
+
+  const { data, error } = await supabase
+    .from("follow_up_tasks")
+    .select(
+      `id, title, notes, due_at, status, source,
+       lead:leads(id, stage, contact:contacts(full_name))`
+    )
+    .eq("status", "PENDING")
+    .eq("source", "AUTOMATIC")
+    .lte("due_at", now.toISOString())
+    .limit(MAX_REMINDER_CANDIDATES_PER_RUN);
+
+  if (error) {
+    console.error(
+      JSON.stringify({ step: "auto_escalation_candidates_query_failed", message: error.message })
+    );
+    return { attempted: 0, sent: 0, failed: 0, error: error.message };
+  }
+
+  const tasks = (data ?? []) as unknown as EscalationTaskRow[];
+  if (tasks.length === 0) {
+    return { attempted: 0, sent: 0, failed: 0 };
+  }
+
+  // A competing MANUAL (or AI_SUGGESTED) PENDING follow-up on the same
+  // lead suspends automatic escalation entirely (§6) — one bulk query
+  // for every candidate lead, rather than one query per row.
+  const leadIds = [...new Set(tasks.map((t) => t.lead?.id).filter((id): id is string => !!id))];
+  const competingLeadIds = new Set<string>();
+  if (leadIds.length > 0) {
+    const { data: competing, error: competingError } = await supabase
+      .from("follow_up_tasks")
+      .select("lead_id")
+      .eq("status", "PENDING")
+      .neq("source", "AUTOMATIC")
+      .in("lead_id", leadIds);
+    if (competingError) {
+      console.error(
+        JSON.stringify({ step: "auto_escalation_competing_query_failed", message: competingError.message })
+      );
+      // Fail safe, not fail loud: if we can't tell whether a manual
+      // follow-up exists, do not risk sending a competing automatic
+      // email underneath it — skip this whole run rather than guess.
+      return { attempted: 0, sent: 0, failed: 0, error: competingError.message };
+    }
+    for (const row of (competing ?? []) as { lead_id: string }[]) {
+      competingLeadIds.add(row.lead_id);
+    }
+  }
+
+  const provider = getEmailProvider();
+  let attempted = 0;
+  let sent = 0;
+  let failed = 0;
+
+  for (const task of tasks) {
+    const eligible = isAutomaticEscalationEligible(
+      {
+        taskStatus: task.status,
+        taskSource: task.source,
+        dueAtIso: task.due_at,
+        leadStage: task.lead?.stage ?? "",
+        hasCompetingManualFollowUp: task.lead ? competingLeadIds.has(task.lead.id) : false,
+      },
+      now,
+      isBusinessDayToday
+    );
+    if (!eligible) continue;
+
+    attempted += 1;
+
+    // Atomic claim, first attempt of the day: INSERT ... ON CONFLICT DO
+    // NOTHING against the (follow_up_task_id, escalation_date) unique
+    // constraint. A concurrent/repeated invocation racing for the same
+    // (task, day) simply gets zero rows back.
+    const { data: inserted, error: insertError } = await supabase
+      .from("lead_auto_escalation_deliveries")
+      .insert({
+        follow_up_task_id: task.id,
+        escalation_date: nowParts.dateKey,
+        status: "SENDING",
+        attempt_count: 1,
+        last_attempted_at: now.toISOString(),
+      })
+      .select("id")
+      .single();
+
+    let claimedId: string | null = null;
+
+    if (!insertError && inserted) {
+      claimedId = inserted.id;
+    } else {
+      // Conflict (or transient error): a row for (task, today) already
+      // exists. Only a FAILED row, still within the retry budget and
+      // past backoff, may be reclaimed — SENT/SENDING never are.
+      const { data: existing } = await supabase
+        .from("lead_auto_escalation_deliveries")
+        .select("id, status, attempt_count, last_attempted_at")
+        .eq("follow_up_task_id", task.id)
+        .eq("escalation_date", nowParts.dateKey)
+        .maybeSingle();
+
+      if (
+        existing &&
+        existing.status === "FAILED" &&
+        existing.attempt_count < MAX_ATTEMPTS &&
+        new Date(existing.last_attempted_at).getTime() + RETRY_BACKOFF_MINUTES * 60_000 <= now.getTime()
+      ) {
+        const { data: reclaimed } = await supabase
+          .from("lead_auto_escalation_deliveries")
+          .update({ status: "SENDING", attempt_count: existing.attempt_count + 1, last_attempted_at: now.toISOString() })
+          .eq("id", existing.id)
+          .eq("status", "FAILED")
+          .select("id")
+          .single();
+        if (reclaimed) claimedId = reclaimed.id;
+      }
+    }
+
+    if (!claimedId) continue; // lost the race, already sent today, or not yet eligible for retry
+
+    try {
+      const path = task.lead ? `/leads/${task.lead.id}` : null;
+      if (!path) {
+        await supabase
+          .from("lead_auto_escalation_deliveries")
+          .update({ status: "FAILED", last_error: "Automatic follow-up has no linked Lead" })
+          .eq("id", claimedId);
+        failed += 1;
+        continue;
+      }
+
+      const email = buildFollowUpReminderEmail({
+        contactName: task.lead?.contact?.full_name ?? "איש קשר",
+        reason: [task.title, task.notes].filter(Boolean).join(" — "),
+        dueAtIso: task.due_at,
+        recordUrl: `${appBaseUrl}${path}`,
+      });
+
+      const result = await provider.send({
+        to: recipient,
+        subject: email.subject,
+        html: email.html,
+        text: email.text,
+      });
+
+      const update = deliveryUpdateForSendResult(result, new Date());
+      await supabase
+        .from("lead_auto_escalation_deliveries")
+        .update(
+          update.status === "SENT"
+            ? { status: "SENT", sent_at: update.sent_at, provider_message_id: update.provider_message_id, last_error: null }
+            : { status: "FAILED", last_error: sanitizeErrorForStorage(update.last_error) }
+        )
+        .eq("id", claimedId)
+        .eq("status", "SENDING");
+      if (update.status === "SENT") sent += 1;
+      else failed += 1;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error sending escalation reminder";
+      await supabase
+        .from("lead_auto_escalation_deliveries")
+        .update({ status: "FAILED", last_error: sanitizeErrorForStorage(message) })
+        .eq("id", claimedId);
+      failed += 1;
+    }
+  }
+
+  return { attempted, sent, failed };
+}
+
 export async function GET(request: Request): Promise<Response> {
   let expectedSecret: string;
   try {
@@ -385,11 +636,14 @@ export async function GET(request: Request): Promise<Response> {
   const supabase = createAdminClient();
 
   const reminders = await processReminders(supabase);
+  const escalations = await processAutomaticEscalations(supabase);
   const digest = await processDailyDigest(supabase);
 
   // Only ids/counts/dates — never a contact name, note, or email
   // address.
-  console.log(JSON.stringify({ step: "follow_up_notifications_cron_completed", reminders, digest }));
+  console.log(
+    JSON.stringify({ step: "follow_up_notifications_cron_completed", reminders, escalations, digest })
+  );
 
-  return Response.json({ ok: true, reminders, digest });
+  return Response.json({ ok: true, reminders, escalations, digest });
 }

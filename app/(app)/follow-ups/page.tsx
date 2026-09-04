@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FollowUpRow } from "@/components/follow-ups/follow-up-row";
 import { isSameZonedCalendarDay } from "@/lib/crm/timezone";
+import { filterActionableFollowUps } from "@/lib/crm/follow-up-visibility";
 import type { FollowUpWithRelations } from "@/lib/crm/types";
 
 export const metadata: Metadata = { title: "מעקבים — GAL CRM" };
@@ -35,8 +36,20 @@ export default async function FollowUpsPage() {
       .limit(20),
   ]);
 
-  const pending = (pendingRes.data ?? []) as unknown as FollowUpWithRelations[];
+  const pendingRaw = (pendingRes.data ?? []) as unknown as FollowUpWithRelations[];
   const completed = (completedRes.data ?? []) as unknown as FollowUpWithRelations[];
+
+  // Actionable-visibility rule (Automatic Lead Follow-Up Escalation
+  // Loop): a lead with an active MANUAL follow-up shows only that one
+  // here, not a second, competing AUTOMATIC row for the same lead —
+  // see lib/crm/follow-up-visibility.ts. The AUTOMATIC row itself is
+  // untouched in the database either way; it still exists, stays
+  // PENDING, and keeps driving the escalation state exactly as before.
+  const pending = filterActionableFollowUps(pendingRaw, (t) => ({
+    source: t.source,
+    status: t.status,
+    leadId: t.lead?.id ?? null,
+  }));
 
   const now = new Date();
   // "Today" means Israel's calendar day, not the rendering server's own

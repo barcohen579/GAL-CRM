@@ -30,7 +30,17 @@ declare
   v_count int;
   v_row record;
   v_claim record;
-  v_today date := current_date;
+  -- Deliberately NOT current_date: the real follow-up-notifications cron
+  -- only ever processes "today" (and the digest's own SKIPPED_EMPTY/
+  -- SENT row for the real current_date can already exist in Production
+  -- by the time this test happens to run — found during the Automatic
+  -- Lead Follow-Up Escalation Loop's own regression pass, 2026-09-04:
+  -- a real SKIPPED_EMPTY row for that date already existed from actual
+  -- cron activity, which made Scenario 5 below fail to claim a "fresh"
+  -- date that, in reality, wasn't fresh). 90 days out is a date no real
+  -- cron invocation will ever have touched, so this test's own claims
+  -- never collide with genuine committed data.
+  v_today date := current_date + 90;
   v_leads_before int; v_leads_after int;
   v_customers_before int; v_customers_after int;
   v_payments_before int; v_payments_after int;

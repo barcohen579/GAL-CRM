@@ -7,6 +7,7 @@
 // does the actual DB reads/claim/send and calls this for the decision.
 
 import type { EmailSendResult } from "./email-provider.ts";
+import { normalizePhone } from "../meta/normalize.ts";
 
 export type FollowUpTaskStatus = "PENDING" | "COMPLETED" | "CANCELLED";
 export type ReminderDeliveryStatus = "PENDING" | "SENDING" | "SENT" | "FAILED";
@@ -81,23 +82,22 @@ export function isReminderEligible(
   }
 }
 
-/** The text shown to Gal as "why she needs to contact this Lead/Customer
- *  now" in a one-shot reminder email — always this exact follow-up
- *  task's own title and notes, whatever its source. For a MANUAL
- *  follow-up this is, by construction, always the CURRENT one: "One
- *  current MANUAL follow-up per Lead" (see
- *  create_manual_follow_up_for_lead in
- *  supabase/migrations/20260904170000_..._one_current_manual_follow_up_rpc.sql)
- *  guarantees a superseded older MANUAL follow-up is CANCELLED before
- *  this ever runs against it (isReminderEligible already excludes any
- *  non-PENDING task), so there is never a second, stale reason
- *  competing with it. Extracted as its own pure function — previously
- *  duplicated inline in the cron route's two callers (the individual
- *  reminder and the automatic escalation email) — purely so this one
- *  formatting rule has exactly one, independently testable
- *  implementation. */
-export function buildFollowUpReason(title: string, notes: string | null): string {
-  return [title, notes].filter(Boolean).join(" — ");
+/** The WhatsApp deep link Gal can tap, straight from a reminder email,
+ *  to open a chat with this Lead/Customer — or null when there is no
+ *  usable phone number on file. Reuses normalizePhone
+ *  (lib/meta/normalize.ts) — the same Israel-aware "leading 0 -> 972"
+ *  digit normalization already trusted for Meta Lead Ads contact
+ *  matching — rather than a second, inconsistent phone-parsing
+ *  implementation living in the notifications system. Deliberately
+ *  returns only the resulting wa.me URL, never the phone number
+ *  itself: neither buildManualFollowUpReminderEmail nor
+ *  buildAutomaticFollowUpReminderEmail (lib/notifications/templates.ts)
+ *  accepts a raw phone at all, only this URL, so a raw phone number
+ *  can never leak into an email body through this path. */
+export function buildWhatsAppUrl(phone: string | null | undefined): string | null {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return null;
+  return `https://wa.me/${normalized}`;
 }
 
 export type DeliveryTerminalUpdate =

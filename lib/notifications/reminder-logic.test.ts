@@ -4,7 +4,7 @@ import {
   isReminderEligible,
   deliveryUpdateForSendResult,
   isAutomaticEscalationEligible,
-  buildFollowUpReason,
+  buildWhatsAppUrl,
 } from "./reminder-logic.ts";
 
 const NOW = new Date("2026-09-10T10:00:00.000Z");
@@ -205,32 +205,36 @@ test("deliveryUpdateForSendResult: a network/timeout-style failure also produces
 });
 
 // ------------------------------------------------------------------
-// buildFollowUpReason — "what drives the email": the exact text Gal
-// sees explaining why she needs to contact this Lead/Customer now.
+// buildWhatsAppUrl — the wa.me deep link an email's WhatsApp button
+// uses, derived from a raw stored phone number via the repository's
+// existing normalizePhone (lib/meta/normalize.ts), never a second,
+// inconsistent parser.
 // ------------------------------------------------------------------
 
-test("buildFollowUpReason: title and notes are joined with an em dash when both are present", () => {
-  assert.equal(
-    buildFollowUpReason("לחזור אליה", "ביקשה שאחזור ביום ראשון אחרי 16:00"),
-    "לחזור אליה — ביקשה שאחזור ביום ראשון אחרי 16:00"
-  );
+test("buildWhatsAppUrl: a valid Israeli local-format phone produces the correct wa.me URL", () => {
+  assert.equal(buildWhatsAppUrl("0532324332"), "https://wa.me/972532324332");
 });
 
-test("buildFollowUpReason: title alone when notes is null — never a dangling separator", () => {
-  assert.equal(buildFollowUpReason("לחזור אליה מחר", null), "לחזור אליה מחר");
+test("buildWhatsAppUrl: an already-E.164 phone (with a leading +) also works", () => {
+  assert.equal(buildWhatsAppUrl("+972532324332"), "https://wa.me/972532324332");
 });
 
-test("buildFollowUpReason: title alone when notes is an empty string", () => {
-  assert.equal(buildFollowUpReason("לחזור אליה מחר", ""), "לחזור אליה מחר");
+test("buildWhatsAppUrl: a phone with formatting punctuation (dashes/spaces) normalizes the same way", () => {
+  assert.equal(buildWhatsAppUrl("053-232-4332"), "https://wa.me/972532324332");
 });
 
-test("buildFollowUpReason: reflects the CURRENT MANUAL follow-up's own title/notes — a superseded one's text is never mixed in (the caller only ever passes the still-PENDING row's own fields)", () => {
-  // Simulates exactly the ליד בדיקה-shaped case: an old, superseded
-  // MANUAL follow-up with a generic title and no notes, and the new,
-  // current one with Gal's own real context — the email must be built
-  // from the current one's fields alone.
-  const supersededOldReason = buildFollowUpReason("מעקב מול ליד בדיקה", null);
-  const currentReason = buildFollowUpReason("ליד בדיקה", "גל גל גל");
-  assert.equal(currentReason, "ליד בדיקה — גל גל גל");
-  assert.notEqual(currentReason, supersededOldReason);
+test("buildWhatsAppUrl: null phone -> null (no WhatsApp button)", () => {
+  assert.equal(buildWhatsAppUrl(null), null);
+});
+
+test("buildWhatsAppUrl: undefined phone -> null", () => {
+  assert.equal(buildWhatsAppUrl(undefined), null);
+});
+
+test("buildWhatsAppUrl: empty string -> null", () => {
+  assert.equal(buildWhatsAppUrl(""), null);
+});
+
+test("buildWhatsAppUrl: an implausibly short/invalid phone -> null, same as normalizePhone's own rule", () => {
+  assert.equal(buildWhatsAppUrl("123"), null);
 });

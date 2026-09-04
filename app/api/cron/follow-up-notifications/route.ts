@@ -35,14 +35,15 @@ import { verifyCronAuthHeader } from "../../../../lib/cron/auth.ts";
 import { getEmailProvider } from "../../../../lib/notifications/get-email-provider.ts";
 import { getAppBaseUrl, getGalNotificationEmail } from "../../../../lib/notifications/env.ts";
 import {
-  buildFollowUpReminderEmail,
+  buildManualFollowUpReminderEmail,
+  buildAutomaticFollowUpReminderEmail,
   buildDailyDigestEmail,
 } from "../../../../lib/notifications/templates.ts";
 import {
   isReminderEligible,
   deliveryUpdateForSendResult,
   isAutomaticEscalationEligible,
-  buildFollowUpReason,
+  buildWhatsAppUrl,
 } from "../../../../lib/notifications/reminder-logic.ts";
 import {
   ISRAEL_TIME_ZONE,
@@ -52,6 +53,7 @@ import {
   isFollowUpBusinessDay,
 } from "../../../../lib/crm/timezone.ts";
 import { formatDate, formatTimeOnly } from "../../../../lib/crm/format.ts";
+import { SERVICE_TYPE_LABELS, type ServiceType } from "../../../../lib/crm/constants.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -79,8 +81,13 @@ type ReminderTaskRow = {
   due_at: string;
   status: "PENDING" | "COMPLETED" | "CANCELLED";
   source?: "MANUAL" | "AUTOMATIC" | "AI_SUGGESTED";
-  lead: { id: string; stage?: string; contact: { full_name: string } | null } | null;
-  customer: { id: string; contact: { full_name: string } | null } | null;
+  lead: {
+    id: string;
+    stage?: string;
+    contact: { full_name: string; phone: string | null } | null;
+    interested_services?: { service_type: ServiceType }[];
+  } | null;
+  customer: { id: string; contact: { full_name: string; phone: string | null } | null } | null;
 };
 
 type ReminderDeliveryRow = {
@@ -102,6 +109,28 @@ function contactNameOf(task: {
   customer: { contact: { full_name: string } | null } | null;
 }): string {
   return task.lead?.contact?.full_name ?? task.customer?.contact?.full_name ?? "איש קשר";
+}
+
+// The stored phone is never itself included in an email (see
+// buildWhatsAppUrl in lib/notifications/reminder-logic.ts) — this is
+// only ever fed into that function to derive a wa.me URL.
+function phoneOf(task: {
+  lead: { contact: { phone: string | null } | null } | null;
+  customer: { contact: { phone: string | null } | null } | null;
+}): string | null {
+  return task.lead?.contact?.phone ?? task.customer?.contact?.phone ?? null;
+}
+
+// Already-resolved Hebrew labels (SERVICE_TYPE_LABELS) — a raw enum
+// value like GROUP_TRAINING never reaches the email templates. Always
+// [] for a customer-linked follow-up (interested services are a Lead-
+// only concept — lead_interested_services has no customer_id at all).
+function interestedServiceLabelsOf(task: {
+  lead: { interested_services?: { service_type: ServiceType }[] } | null;
+}): string[] {
+  return (task.lead?.interested_services ?? []).map(
+    (s) => SERVICE_TYPE_LABELS[s.service_type]
+  );
 }
 
 // Defensive cap so a pathological provider error message can never
@@ -158,8 +187,11 @@ async function processReminders(supabase: SupabaseClient) {
       `id, status, attempt_count, last_attempted_at,
        follow_up_task:follow_up_tasks(
          id, title, notes, due_at, status, source,
-         lead:leads(id, contact:contacts(full_name)),
-         customer:customers(id, contact:contacts(full_name))
+         lead:leads(
+           id, contact:contacts(full_name, phone),
+           interested_services:lead_interested_services(service_type)
+         ),
+         customer:customers(id, contact:contacts(full_name, phone))
        )`
     )
     .in("status", ["PENDING", "FAILED"])
@@ -223,11 +255,14 @@ async function processReminders(supabase: SupabaseClient) {
         continue;
       }
 
-      const email = buildFollowUpReminderEmail({
-        contactName: contactNameOf(task),
-        reason: buildFollowUpReason(task.title, task.notes),
+      const email = buildManualFollowUpReminderEmail({
+        leadName: contactNameOf(task),
+        title: task.title,
+        notes: task.notes,
+        interestedServiceLabels: interestedServiceLabelsOf(task),
         dueAtIso: task.due_at,
         recordUrl: `${appBaseUrl}${path}`,
+        whatsappUrl: buildWhatsAppUrl(phoneOf(task)),
       });
 
       const result = await provider.send({
@@ -417,12 +452,15 @@ async function processDailyDigest(supabase: SupabaseClient) {
 
 type EscalationTaskRow = {
   id: string;
-  title: string;
-  notes: string | null;
   due_at: string;
   status: "PENDING" | "COMPLETED" | "CANCELLED";
   source: "MANUAL" | "AUTOMATIC" | "AI_SUGGESTED";
-  lead: { id: string; stage: string; contact: { full_name: string } | null } | null;
+  lead: {
+    id: string;
+    stage: string;
+    contact: { full_name: string; phone: string | null } | null;
+    interested_services?: { service_type: ServiceType }[];
+  } | null;
 };
 
 async function processAutomaticEscalations(supabase: SupabaseClient) {
@@ -454,8 +492,11 @@ async function processAutomaticEscalations(supabase: SupabaseClient) {
   const { data, error } = await supabase
     .from("follow_up_tasks")
     .select(
-      `id, title, notes, due_at, status, source,
-       lead:leads(id, stage, contact:contacts(full_name))`
+      `id, due_at, status, source,
+       lead:leads(
+         id, stage, contact:contacts(full_name, phone),
+         interested_services:lead_interested_services(service_type)
+       )`
     )
     .eq("status", "PENDING")
     .eq("source", "AUTOMATIC")
@@ -582,11 +623,11 @@ async function processAutomaticEscalations(supabase: SupabaseClient) {
         continue;
       }
 
-      const email = buildFollowUpReminderEmail({
-        contactName: task.lead?.contact?.full_name ?? "איש קשר",
-        reason: buildFollowUpReason(task.title, task.notes),
-        dueAtIso: task.due_at,
+      const email = buildAutomaticFollowUpReminderEmail({
+        leadName: task.lead?.contact?.full_name ?? "איש קשר",
+        interestedServiceLabels: interestedServiceLabelsOf(task),
         recordUrl: `${appBaseUrl}${path}`,
+        whatsappUrl: buildWhatsAppUrl(task.lead?.contact?.phone ?? null),
       });
 
       const result = await provider.send({

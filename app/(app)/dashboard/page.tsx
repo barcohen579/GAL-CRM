@@ -48,8 +48,15 @@ import {
   aggregateLeadSources,
   buildMonthlySalesFunnel,
   buildMonthlyReferralMetrics,
+  aggregateExpensesByCategory,
 } from "@/lib/crm/business-report";
-import type { LeadStage, ServiceType, TouchpointChannel } from "@/lib/crm/constants";
+import type { RecurringExpenseRow } from "@/components/dashboard/recurring-expenses-manager";
+import type {
+  LeadStage,
+  ServiceType,
+  TouchpointChannel,
+  BusinessExpenseCategory,
+} from "@/lib/crm/constants";
 
 export const metadata: Metadata = { title: "לוח בקרה — GAL CRM" };
 export const dynamic = "force-dynamic";
@@ -116,6 +123,7 @@ export default async function DashboardPage({
     newCustomersInMonthRes,
     allReferralsRes,
     allCustomersContactMapRes,
+    recurringExpensesRes,
   ] = await Promise.all([
     supabase
       .from("follow_up_tasks")
@@ -182,7 +190,7 @@ export default async function DashboardPage({
     // already cover. ----
     supabase
       .from("business_expenses")
-      .select("id, expense_date, amount_minor, category, description")
+      .select("id, expense_date, amount_minor, category, description, recurring_expense_id")
       .gte("expense_date", selectedMonth.startDate)
       .lte("expense_date", selectedMonth.endDate)
       .order("expense_date", { ascending: false }),
@@ -218,6 +226,14 @@ export default async function DashboardPage({
     // while only its resulting revenue is month-scoped.
     supabase.from("referrals").select("created_at, referred_contact_id"),
     supabase.from("customers").select("id, contact_id"),
+    // Recurring expense DEFINITIONS ("הוצאות קבועות") — not month-scoped
+    // (a recurring series isn't a dated event), active ones first so
+    // the management card leads with what's currently running.
+    supabase
+      .from("business_recurring_expenses")
+      .select("id, description, category, amount_minor, status")
+      .order("status", { ascending: true })
+      .order("created_at", { ascending: false }),
   ]);
 
   // Confirmed-Meta-attributed revenue traces CONFIRMED META_AD leads ->
@@ -373,6 +389,20 @@ export default async function DashboardPage({
     monthKeyOf,
   });
 
+  // Expenses by category ("הוצאות לפי קטגוריה") — reconciles exactly to
+  // selectedMonthRow.otherExpensesMinor by construction (same
+  // expense_date-in-month row set businessExpensesInMonthRes already
+  // fetched for the ledger list below).
+  const businessExpensesInMonth = (businessExpensesInMonthRes.data ?? []) as unknown as {
+    amount_minor: number;
+    category: BusinessExpenseCategory;
+  }[];
+  const expensesByCategory = aggregateExpensesByCategory(businessExpensesInMonth);
+
+  // Recurring expense definitions — not month-scoped, see the query's
+  // own comment above.
+  const recurringExpenses = (recurringExpensesRes.data ?? []) as unknown as RecurringExpenseRow[];
+
   const financialSummaryData: FinancialSummaryData = {
     revenueMinor: selectedMonthRow.revenueMinor,
     metaSpendMinor: selectedMonthRow.metaSpendMinor,
@@ -383,6 +413,8 @@ export default async function DashboardPage({
     revenueByService,
     leadSources,
     referralMetrics,
+    expensesByCategory,
+    recurringExpenses,
     expenses: (businessExpensesInMonthRes.data ?? []) as FinancialSummaryData["expenses"],
   };
 

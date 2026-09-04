@@ -190,13 +190,25 @@ export const CUSTOMER_STATUS_LABELS: Record<string, string> = {
   INACTIVE: "לא פעילה",
 };
 
+// Order matches the sequence Gal sees in the "קטגוריה" select — the
+// most common studio expenses first, "אחר" always last. Extended
+// beyond the original 7 (see
+// supabase/migrations/20260904090000_..._recurring_business_expenses.sql
+// for the ALTER TYPE ADD VALUE statements) with 5 more real categories
+// a fitness-studio business needs; existing values/labels below are
+// kept exactly as already stored in production rows.
 export const BUSINESS_EXPENSE_CATEGORIES = [
   "RENT",
-  "SOFTWARE_SUBSCRIPTIONS",
+  "UTILITIES",
   "EQUIPMENT",
-  "MARKETING_OTHER",
-  "PROFESSIONAL_SERVICES",
   "MAINTENANCE",
+  "SOFTWARE_SUBSCRIPTIONS",
+  "MARKETING_OTHER",
+  "CONTENT_PRODUCTION",
+  "PROFESSIONAL_SERVICES",
+  "INSURANCE",
+  "TRAINING_EDUCATION",
+  "OFFICE_SUPPLIES",
   "OTHER",
 ] as const;
 
@@ -204,10 +216,15 @@ export type BusinessExpenseCategory = (typeof BUSINESS_EXPENSE_CATEGORIES)[numbe
 
 export const BUSINESS_EXPENSE_CATEGORY_LABELS: Record<BusinessExpenseCategory, string> = {
   RENT: "שכירות",
+  UTILITIES: "ארנונה / חשבונות",
+  EQUIPMENT: "ציוד ומכשירים",
+  MAINTENANCE: "תחזוקה ותיקונים",
   SOFTWARE_SUBSCRIPTIONS: "תוכנות ומנויים",
-  EQUIPMENT: "ציוד",
   MARKETING_OTHER: "שיווק ופרסום אחר",
-  PROFESSIONAL_SERVICES: "אנשי מקצוע / ספקים",
-  MAINTENANCE: "תחזוקה",
+  CONTENT_PRODUCTION: "צילום / תוכן",
+  PROFESSIONAL_SERVICES: 'הנהלת חשבונות / רו"ח',
+  INSURANCE: "ביטוחים",
+  TRAINING_EDUCATION: "הכשרות / קורסים",
+  OFFICE_SUPPLIES: "ציוד משרדי / תפעולי",
   OTHER: "אחר",
 };

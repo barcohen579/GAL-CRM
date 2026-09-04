@@ -17,7 +17,8 @@
     "db:test:referrals": "supabase db query --linked -f supabase/tests/referrals.test.sql",
     "db:test:recurring-billing": "supabase db query --linked -f supabase/tests/recurring_billing.test.sql",
     "db:test:edit-customer": "supabase db query --linked -f supabase/tests/edit_customer_details.test.sql",
-    "db:test:business-expenses": "supabase db query --linked -f supabase/tests/business_expenses.test.sql"
+    "db:test:business-expenses": "supabase db query --linked -f supabase/tests/business_expenses.test.sql",
+    "db:test:recurring-business-expenses": "supabase db query --linked -f supabase/tests/recurring_business_expenses.test.sql"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

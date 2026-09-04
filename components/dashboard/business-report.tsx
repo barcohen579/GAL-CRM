@@ -1,11 +1,20 @@
-import { Wallet, Megaphone, Receipt, Calculator, TrendingUp, Target, Users } from "lucide-react";
+import { Wallet, Megaphone, Receipt, Calculator, TrendingUp, Target, Users, PieChart } from "lucide-react";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ExpenseList, type BusinessExpenseRow } from "./expense-list";
+import { RecurringExpensesManager, type RecurringExpenseRow } from "./recurring-expenses-manager";
 import { formatMoney } from "@/lib/crm/format";
-import { SERVICE_TYPE_LABELS, TOUCHPOINT_CHANNEL_LABELS } from "@/lib/crm/constants";
+import {
+  SERVICE_TYPE_LABELS,
+  TOUCHPOINT_CHANNEL_LABELS,
+  BUSINESS_EXPENSE_CATEGORY_LABELS,
+} from "@/lib/crm/constants";
 import type { MonthOverMonthChange } from "@/lib/crm/marketing";
-import type { ServiceRevenueRow, MonthlyReferralMetrics } from "@/lib/crm/business-report";
+import type {
+  ServiceRevenueRow,
+  MonthlyReferralMetrics,
+  ExpenseCategoryRow,
+} from "@/lib/crm/business-report";
 import type { TouchpointChannel } from "@/lib/crm/constants";
 
 // Shared presentational building blocks — also used by
@@ -93,6 +102,8 @@ export type FinancialSummaryData = {
   revenueByService: ServiceRevenueRow[];
   leadSources: Record<TouchpointChannel, number>;
   referralMetrics: MonthlyReferralMetrics;
+  expensesByCategory: ExpenseCategoryRow[];
+  recurringExpenses: RecurringExpenseRow[];
   expenses: BusinessExpenseRow[];
 };
 
@@ -107,12 +118,16 @@ export function FinancialSummary({ data }: { data: FinancialSummaryData }) {
     revenueByService,
     leadSources,
     referralMetrics,
+    expensesByCategory,
+    recurringExpenses,
     expenses,
   } = data;
 
   const totalLeadSources = Object.values(leadSources).reduce((a, b) => a + b, 0);
   const maxServiceRevenue = Math.max(1, ...revenueByService.map((r) => r.amountMinor));
   const maxLeadSourceCount = Math.max(1, ...Object.values(leadSources));
+  const totalExpensesByCategory = expensesByCategory.reduce((a, r) => a + r.amountMinor, 0);
+  const maxExpenseCategory = Math.max(1, ...expensesByCategory.map((r) => r.amountMinor));
 
   return (
     <div>
@@ -239,6 +254,49 @@ export function FinancialSummary({ data }: { data: FinancialSummaryData }) {
             </ul>
           )}
         </Card>
+      </div>
+
+      {/* ---- Where the money went: expenses by category + the
+          recurring-expense series manager ---- */}
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader
+            title="הוצאות לפי קטגוריה"
+            description={`סה״כ: ${formatMoney(totalExpensesByCategory)}`}
+          />
+          {expensesByCategory.length === 0 ? (
+            <div className="p-5">
+              <EmptyState icon={PieChart} title="אין עדיין הוצאות עסק לחודש זה" />
+            </div>
+          ) : (
+            <ul className="space-y-3 px-5 py-4">
+              {expensesByCategory.map((r) => (
+                <li key={r.category}>
+                  <div className="mb-1 flex items-center justify-between text-sm">
+                    <span className="font-medium text-zinc-700">
+                      {BUSINESS_EXPENSE_CATEGORY_LABELS[r.category] ?? r.category}
+                    </span>
+                    <span className="font-semibold text-zinc-900">
+                      {formatMoney(r.amountMinor)}
+                    </span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-100">
+                    <div
+                      className="h-full rounded-full bg-amber-500"
+                      style={{ width: `${(r.amountMinor / maxExpenseCategory) * 100}%` }}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="border-t border-zinc-100 px-5 py-3 text-xs text-zinc-500">
+            הוצאות עסק ידניות וקבועות בלבד — הוצאת פרסום Meta מוצגת בנפרד למעלה
+            ואינה כלולה כאן.
+          </p>
+        </Card>
+
+        <RecurringExpensesManager recurringExpenses={recurringExpenses} />
       </div>
 
       {/* ---- Referrals + expenses ---- */}

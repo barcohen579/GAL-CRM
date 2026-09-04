@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
-import { Plus, Pencil, X } from "lucide-react";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { Plus, Pencil, X, Repeat } from "lucide-react";
 import {
   addExpense,
   updateExpense,
@@ -34,11 +34,23 @@ type ExistingExpense = {
   description: string | null;
 };
 
+// "חד־פעמית" / "חודשית קבועה" — deliberately its own small vocabulary,
+// not RECURRENCE_LABELS (that one's phrasing is for a customer
+// Purchase's payment recurrence, a different concept/screen).
+const EXPENSE_KIND_LABELS = {
+  ONE_TIME: "חד־פעמית",
+  RECURRING_MONTHLY: "חודשית קבועה",
+} as const;
+
 // "הוספת הוצאה" / "עריכת הוצאה" — one dialog for both: passing
 // `expense` switches it into edit mode (calls updateExpense,
 // pre-filled, "שמירת שינויים") instead of add mode (calls addExpense,
-// blank, "הוספת הוצאה"). Never touches Meta spend — that stays fully
-// automatic via meta_campaign_daily_metrics (see
+// blank, "הוספת הוצאה"). The one-time/recurring toggle only appears in
+// ADD mode — editing an existing row always corrects just that one
+// row's own fields (see expense-list.tsx/recurring-expenses-manager.tsx
+// for the separate "שינוי סכום חודשי"/"הפסקת הוצאה חודשית" actions that
+// manage a recurring SERIES itself). Never touches Meta spend — that
+// stays fully automatic via meta_campaign_daily_metrics (see
 // app/(app)/dashboard/actions.ts).
 export function ExpenseDialog({ expense }: { expense?: ExistingExpense }) {
   const isEdit = Boolean(expense);
@@ -46,6 +58,7 @@ export function ExpenseDialog({ expense }: { expense?: ExistingExpense }) {
   const formRef = useRef<HTMLFormElement>(null);
   const action = isEdit ? updateExpense : addExpense;
   const [state, formAction, isPending] = useActionState(action, initialState);
+  const [kind, setKind] = useState<"ONE_TIME" | "RECURRING_MONTHLY">("ONE_TIME");
 
   useEffect(() => {
     if (state.success) {
@@ -79,7 +92,10 @@ export function ExpenseDialog({ expense }: { expense?: ExistingExpense }) {
 
       <dialog
         ref={dialogRef}
-        onClose={() => formRef.current?.reset()}
+        onClose={() => {
+          formRef.current?.reset();
+          setKind("ONE_TIME");
+        }}
         className="w-full max-w-sm rounded-2xl border border-zinc-200 p-0 text-right shadow-xl backdrop:bg-zinc-900/40"
       >
         <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-4">
@@ -132,6 +148,30 @@ export function ExpenseDialog({ expense }: { expense?: ExistingExpense }) {
                 className={ltrInputClass}
               />
             </div>
+
+            {!isEdit && (
+              <div className="space-y-1">
+                <label htmlFor="exp_kind" className={labelClass}>
+                  סוג
+                </label>
+                <select
+                  id="exp_kind"
+                  name="kind"
+                  value={kind}
+                  onChange={(e) => setKind(e.target.value as "ONE_TIME" | "RECURRING_MONTHLY")}
+                  className={inputClass}
+                >
+                  <option value="ONE_TIME">{EXPENSE_KIND_LABELS.ONE_TIME}</option>
+                  <option value="RECURRING_MONTHLY">{EXPENSE_KIND_LABELS.RECURRING_MONTHLY}</option>
+                </select>
+                {kind === "RECURRING_MONTHLY" && (
+                  <p className="flex items-start gap-1 text-[11px] text-zinc-400">
+                    <Repeat className="mt-0.5 h-3 w-3 shrink-0" strokeWidth={2} />
+                    הוצאה זו תתווסף אוטומטית בכל חודש עד שתופסק.
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="space-y-1">
               <label htmlFor="exp_category" className={labelClass}>

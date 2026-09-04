@@ -5,6 +5,7 @@ import {
   aggregateLeadSources,
   buildMonthlySalesFunnel,
   buildMonthlyReferralMetrics,
+  aggregateExpensesByCategory,
 } from "./business-report.ts";
 import { SERVICE_TYPES } from "./constants.ts";
 
@@ -240,4 +241,54 @@ test("buildMonthlyReferralMetrics: no referrals at all -> all zeros, no crash", 
     monthKeyOf,
   });
   assert.deepEqual(metrics, { referredCount: 0, becameCustomerCount: 0, revenueMinor: 0 });
+});
+
+// ------------------------------------------------------------------
+// aggregateExpensesByCategory
+// ------------------------------------------------------------------
+
+test("aggregateExpensesByCategory: groups expenses by category", () => {
+  const rows = aggregateExpensesByCategory([
+    { amount_minor: 300000, category: "RENT" },
+    { amount_minor: 25000, category: "EQUIPMENT" },
+    { amount_minor: 5000, category: "EQUIPMENT" },
+  ]);
+  const rent = rows.find((r) => r.category === "RENT")!;
+  const equipment = rows.find((r) => r.category === "EQUIPMENT")!;
+  assert.equal(rent.amountMinor, 300000);
+  assert.equal(equipment.amountMinor, 30000);
+});
+
+test("aggregateExpensesByCategory: sorted largest amount first", () => {
+  const rows = aggregateExpensesByCategory([
+    { amount_minor: 5000, category: "OTHER" },
+    { amount_minor: 300000, category: "RENT" },
+    { amount_minor: 25000, category: "SOFTWARE_SUBSCRIPTIONS" },
+  ]);
+  assert.deepEqual(
+    rows.map((r) => r.category),
+    ["RENT", "SOFTWARE_SUBSCRIPTIONS", "OTHER"]
+  );
+});
+
+test("aggregateExpensesByCategory: never fabricates a zero-amount category — only categories with an actual expense appear", () => {
+  const rows = aggregateExpensesByCategory([{ amount_minor: 10000, category: "RENT" }]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].category, "RENT");
+});
+
+test("aggregateExpensesByCategory: reconciles exactly to the total of all input expenses", () => {
+  const expenses = [
+    { amount_minor: 300000, category: "RENT" as const },
+    { amount_minor: 25000, category: "EQUIPMENT" as const },
+    { amount_minor: 12345, category: "INSURANCE" as const },
+  ];
+  const rows = aggregateExpensesByCategory(expenses);
+  const total = rows.reduce((sum, r) => sum + r.amountMinor, 0);
+  const expected = expenses.reduce((sum, e) => sum + e.amount_minor, 0);
+  assert.equal(total, expected);
+});
+
+test("aggregateExpensesByCategory: empty input -> empty output, no crash", () => {
+  assert.deepEqual(aggregateExpensesByCategory([]), []);
 });

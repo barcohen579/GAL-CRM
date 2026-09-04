@@ -1,6 +1,7 @@
-import { Wallet } from "lucide-react";
+import { Wallet, Repeat } from "lucide-react";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Badge } from "@/components/ui/badge";
 import { ExpenseDialog } from "./expense-dialog";
 import { formatDate, formatMoney } from "@/lib/crm/format";
 import { BUSINESS_EXPENSE_CATEGORY_LABELS } from "@/lib/crm/constants";
@@ -12,6 +13,11 @@ export type BusinessExpenseRow = {
   amount_minor: number;
   category: BusinessExpenseCategory;
   description: string | null;
+  /** Non-null = this row is one occurrence of a recurring expense
+   *  (mirrors payments.purchase_id + billing_cycle). Only its
+   *  presence/absence is used here — see recurring-expenses-manager.tsx
+   *  for actually managing the series (amount/stop). */
+  recurring_expense_id: string | null;
 };
 
 // Compact list of the SELECTED month's manually-entered expenses —
@@ -49,9 +55,19 @@ export function ExpenseList({
           {expenses.map((e) => (
             <li key={e.id} className="flex items-center justify-between gap-3 px-5 py-3">
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-zinc-900">
-                  {BUSINESS_EXPENSE_CATEGORY_LABELS[e.category] ?? e.category}
-                </p>
+                <div className="flex items-center gap-1.5">
+                  <p className="truncate text-sm font-medium text-zinc-900">
+                    {BUSINESS_EXPENSE_CATEGORY_LABELS[e.category] ?? e.category}
+                  </p>
+                  {e.recurring_expense_id ? (
+                    <Badge tone="info">
+                      <Repeat className="h-2.5 w-2.5" strokeWidth={2.5} />
+                      חודשי
+                    </Badge>
+                  ) : (
+                    <Badge tone="neutral">חד־פעמי</Badge>
+                  )}
+                </div>
                 <p className="mt-0.5 truncate text-xs text-zinc-500">
                   {formatDate(e.expense_date)}
                   {e.description ? ` · ${e.description}` : ""}

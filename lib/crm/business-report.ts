@@ -10,7 +10,7 @@
 // there: revenue-by-service, lead-source attribution, the monthly
 // sales funnel, and monthly referral-channel metrics.
 
-import type { ServiceType, TouchpointChannel } from "./constants.ts";
+import type { ServiceType, TouchpointChannel, BusinessExpenseCategory } from "./constants.ts";
 import { SERVICE_TYPES } from "./constants.ts";
 import { safeDivide } from "./marketing.ts";
 
@@ -242,4 +242,45 @@ export function buildMonthlyReferralMetrics(input: {
     .reduce((sum, p) => sum + p.amount, 0);
 
   return { referredCount, becameCustomerCount, revenueMinor };
+}
+
+// ------------------------------------------------------------------
+// Business expenses by category ("פירוט הוצאות לפי קטגוריה") — where
+// the money went this month. Deliberately simpler than
+// aggregateRevenueByService above: that function shows the full
+// service-type vocabulary (including zero-revenue rows) because a
+// stable row count matters for that section's layout; a category
+// breakdown is explicitly asked to stay simple ("do not over-design
+// this") — only categories with an actual expense this month are
+// returned, largest first, so the list directly answers "where did
+// the money go" without an intern list of ₪0 rows to scan past.
+// Never includes Meta spend — callers only ever pass business_expenses
+// rows here, which structurally cannot contain it (see that table's
+// own migration comment).
+// ------------------------------------------------------------------
+
+export type ExpenseForCategoryBreakdown = {
+  amount_minor: number;
+  category: BusinessExpenseCategory;
+};
+
+export type ExpenseCategoryRow = {
+  category: BusinessExpenseCategory;
+  amountMinor: number;
+};
+
+/** Groups already-month-scoped business_expenses rows by category,
+ *  largest total first. The sum of every row's amountMinor always
+ *  equals the sum of every input expense's amount_minor exactly (same
+ *  reconciliation invariant as aggregateRevenueByService). */
+export function aggregateExpensesByCategory(
+  expenses: ExpenseForCategoryBreakdown[]
+): ExpenseCategoryRow[] {
+  const totals = new Map<BusinessExpenseCategory, number>();
+  for (const e of expenses) {
+    totals.set(e.category, (totals.get(e.category) ?? 0) + e.amount_minor);
+  }
+  return [...totals.entries()]
+    .map(([category, amountMinor]) => ({ category, amountMinor }))
+    .sort((a, b) => b.amountMinor - a.amountMinor);
 }

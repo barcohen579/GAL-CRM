@@ -42,6 +42,7 @@ import {
   isReminderEligible,
   deliveryUpdateForSendResult,
   isAutomaticEscalationEligible,
+  buildFollowUpReason,
 } from "../../../../lib/notifications/reminder-logic.ts";
 import {
   ISRAEL_TIME_ZONE,
@@ -224,7 +225,7 @@ async function processReminders(supabase: SupabaseClient) {
 
       const email = buildFollowUpReminderEmail({
         contactName: contactNameOf(task),
-        reason: [task.title, task.notes].filter(Boolean).join(" — "),
+        reason: buildFollowUpReason(task.title, task.notes),
         dueAtIso: task.due_at,
         recordUrl: `${appBaseUrl}${path}`,
       });
@@ -583,7 +584,7 @@ async function processAutomaticEscalations(supabase: SupabaseClient) {
 
       const email = buildFollowUpReminderEmail({
         contactName: task.lead?.contact?.full_name ?? "איש קשר",
-        reason: [task.title, task.notes].filter(Boolean).join(" — "),
+        reason: buildFollowUpReason(task.title, task.notes),
         dueAtIso: task.due_at,
         recordUrl: `${appBaseUrl}${path}`,
       });

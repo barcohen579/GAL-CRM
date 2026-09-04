@@ -81,6 +81,25 @@ export function isReminderEligible(
   }
 }
 
+/** The text shown to Gal as "why she needs to contact this Lead/Customer
+ *  now" in a one-shot reminder email — always this exact follow-up
+ *  task's own title and notes, whatever its source. For a MANUAL
+ *  follow-up this is, by construction, always the CURRENT one: "One
+ *  current MANUAL follow-up per Lead" (see
+ *  create_manual_follow_up_for_lead in
+ *  supabase/migrations/20260904170000_..._one_current_manual_follow_up_rpc.sql)
+ *  guarantees a superseded older MANUAL follow-up is CANCELLED before
+ *  this ever runs against it (isReminderEligible already excludes any
+ *  non-PENDING task), so there is never a second, stale reason
+ *  competing with it. Extracted as its own pure function — previously
+ *  duplicated inline in the cron route's two callers (the individual
+ *  reminder and the automatic escalation email) — purely so this one
+ *  formatting rule has exactly one, independently testable
+ *  implementation. */
+export function buildFollowUpReason(title: string, notes: string | null): string {
+  return [title, notes].filter(Boolean).join(" — ");
+}
+
 export type DeliveryTerminalUpdate =
   | { status: "SENT"; sent_at: string; provider_message_id: string; last_error: null }
   | { status: "FAILED"; last_error: string };

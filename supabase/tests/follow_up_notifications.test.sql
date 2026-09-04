@@ -254,11 +254,24 @@ begin
   -- documented behavior stays true.
   -----------------------------------------------------------------
   declare
+    v_contact2 uuid;
+    v_lead2 uuid;
     v_task2 uuid;
     v_delivery2_status public.follow_up_reminder_status;
   begin
+    -- A fresh lead, not v_lead: v_lead's own Day-0 AUTOMATIC row plus
+    -- v_task (still PENDING, source MANUAL by default, from Scenario 1
+    -- above) already occupy both of v_lead's "at most one PENDING
+    -- AUTOMATIC" / "at most one PENDING MANUAL" slots (see
+    -- 20260904161000_..._automatic_lead_followup_escalation.sql and
+    -- 20260904171000_..._one_pending_manual_per_lead_backfill_and_index.sql) —
+    -- a second PENDING MANUAL row on v_lead would violate that
+    -- invariant and is irrelevant to what this scenario actually tests
+    -- (the delivery row's own status, not which lead it's for).
+    insert into public.contacts (full_name) values ('Test Notification Lead 2') returning id into v_contact2;
+    insert into public.leads (contact_id) values (v_contact2) returning id into v_lead2;
     insert into public.follow_up_tasks (lead_id, title, due_at, status)
-      values (v_lead, 'Test follow-up 2', now() - interval '1 hour', 'PENDING')
+      values (v_lead2, 'Test follow-up 2', now() - interval '1 hour', 'PENDING')
       returning id into v_task2;
 
     update public.follow_up_tasks set status = 'COMPLETED', completed_at = now() where id = v_task2;

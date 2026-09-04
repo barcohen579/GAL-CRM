@@ -4,6 +4,7 @@ import {
   isReminderEligible,
   deliveryUpdateForSendResult,
   isAutomaticEscalationEligible,
+  buildFollowUpReason,
 } from "./reminder-logic.ts";
 
 const NOW = new Date("2026-09-10T10:00:00.000Z");
@@ -151,6 +152,26 @@ test("a lead still INTERESTED (not WON/LOST) keeps its automatic escalation elig
   assert.equal(isAutomaticEscalationEligible(input, NOW, true), true);
 });
 
+test("'One current MANUAL follow-up per Lead': an active PENDING MANUAL follow-up prevents automatic escalation, same rule as any other competing manual", () => {
+  // create_manual_follow_up_for_lead guarantees at most one PENDING
+  // MANUAL follow-up per lead, but this eligibility rule itself doesn't
+  // need to know that — hasCompetingManualFollowUp just means "does
+  // this lead currently have ANY other PENDING non-automatic follow-up",
+  // true whether there is one or (pre-invariant) several.
+  const input = escalationBase({ hasCompetingManualFollowUp: true });
+  assert.equal(isAutomaticEscalationEligible(input, NOW, true), false);
+});
+
+test("a MANUAL follow-up superseded by a newer one (now CANCELLED) can never send its own reminder email, even if its delivery row is still PENDING/overdue", () => {
+  // Exactly the state create_manual_follow_up_for_lead leaves the OLD
+  // MANUAL follow-up in once superseded: status flips to CANCELLED but
+  // its original follow_up_reminder_deliveries row is left exactly as
+  // it was (never deleted, never touched) — isReminderEligible's own
+  // taskStatus check is what stops it from ever being sent.
+  const input = base({ taskStatus: "CANCELLED", taskSource: "MANUAL", deliveryStatus: "PENDING" });
+  assert.equal(isReminderEligible(input, NOW, CONFIG), false);
+});
+
 // ------------------------------------------------------------------
 // deliveryUpdateForSendResult — "never mark SENT until the provider
 // actually confirms" as a directly-testable pure rule.
@@ -181,4 +202,35 @@ test("deliveryUpdateForSendResult: a network/timeout-style failure also produces
     NOW
   );
   assert.equal(update.status, "FAILED");
+});
+
+// ------------------------------------------------------------------
+// buildFollowUpReason — "what drives the email": the exact text Gal
+// sees explaining why she needs to contact this Lead/Customer now.
+// ------------------------------------------------------------------
+
+test("buildFollowUpReason: title and notes are joined with an em dash when both are present", () => {
+  assert.equal(
+    buildFollowUpReason("לחזור אליה", "ביקשה שאחזור ביום ראשון אחרי 16:00"),
+    "לחזור אליה — ביקשה שאחזור ביום ראשון אחרי 16:00"
+  );
+});
+
+test("buildFollowUpReason: title alone when notes is null — never a dangling separator", () => {
+  assert.equal(buildFollowUpReason("לחזור אליה מחר", null), "לחזור אליה מחר");
+});
+
+test("buildFollowUpReason: title alone when notes is an empty string", () => {
+  assert.equal(buildFollowUpReason("לחזור אליה מחר", ""), "לחזור אליה מחר");
+});
+
+test("buildFollowUpReason: reflects the CURRENT MANUAL follow-up's own title/notes — a superseded one's text is never mixed in (the caller only ever passes the still-PENDING row's own fields)", () => {
+  // Simulates exactly the ליד בדיקה-shaped case: an old, superseded
+  // MANUAL follow-up with a generic title and no notes, and the new,
+  // current one with Gal's own real context — the email must be built
+  // from the current one's fields alone.
+  const supersededOldReason = buildFollowUpReason("מעקב מול ליד בדיקה", null);
+  const currentReason = buildFollowUpReason("ליד בדיקה", "גל גל גל");
+  assert.equal(currentReason, "ליד בדיקה — גל גל גל");
+  assert.notEqual(currentReason, supersededOldReason);
 });

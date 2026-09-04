@@ -62,18 +62,40 @@ export async function createFollowUp(
   }
 
   const supabase = await createClient();
-  const { error } = await supabase.from("follow_up_tasks").insert({
-    lead_id: leadId,
-    customer_id: customerId,
-    title,
-    notes,
-    due_at: dueAtIso,
-    status: "PENDING",
-    source: "MANUAL",
-  });
 
-  if (error) {
-    return { error: `לא הצלחנו לשמור את המעקב: ${error.message}` };
+  if (leadId) {
+    // "One current MANUAL follow-up per Lead": create_manual_follow_up_for_lead
+    // is the single authoritative, transactional way to create a
+    // Lead-linked MANUAL follow-up — it atomically cancels (never
+    // deletes) any still-PENDING MANUAL follow-up already on this lead
+    // and inserts the new one as the lead's single current PENDING
+    // MANUAL row, with a lead-row lock making it safe against a
+    // concurrent creation for the same lead. See
+    // supabase/migrations/20260904170000_..._one_current_manual_follow_up_rpc.sql.
+    // A customer-linked follow-up (below) has no AUTOMATIC fallback to
+    // coordinate with, so it keeps the plain insert — this invariant is
+    // Lead-specific.
+    const { error } = await supabase.rpc("create_manual_follow_up_for_lead", {
+      p_lead_id: leadId,
+      p_title: title,
+      p_notes: notes,
+      p_due_at: dueAtIso,
+    });
+    if (error) {
+      return { error: `לא הצלחנו לשמור את המעקב: ${error.message}` };
+    }
+  } else {
+    const { error } = await supabase.from("follow_up_tasks").insert({
+      customer_id: customerId,
+      title,
+      notes,
+      due_at: dueAtIso,
+      status: "PENDING",
+      source: "MANUAL",
+    });
+    if (error) {
+      return { error: `לא הצלחנו לשמור את המעקב: ${error.message}` };
+    }
   }
 
   revalidateFollowUpPaths(leadId, customerId);

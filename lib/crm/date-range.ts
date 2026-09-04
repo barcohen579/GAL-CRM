@@ -1,4 +1,11 @@
-// Date-range resolution for the dashboard's marketing section.
+// Date resolution for the dashboard. The whole dashboard has exactly
+// ONE time context — the calendar month selected via `?month=YYYY-MM`
+// at the top of the page (see resolveSelectedMonth below); there is no
+// separate rolling-window/range concept anywhere else on this page
+// (a previous version of the Marketing section had its own independent
+// 7d/30d/this-month/last-month selector — removed, see git history —
+// specifically to avoid two different active date contexts existing on
+// the same page at once).
 //
 // Follows the same local-Date convention already used throughout this
 // app (see startOfMonthISO/startOfTodayISO/endOfTodayISO in format.ts)
@@ -9,34 +16,6 @@
 // server-local time from Asia/Jerusalem anywhere else in this app, and
 // this section intentionally stays consistent with that rather than
 // being the one inconsistent place that suddenly cares.
-
-export const MARKETING_RANGE_OPTIONS = [
-  { value: "7d", label: "7 ימים אחרונים" },
-  { value: "30d", label: "30 ימים אחרונים" },
-  { value: "month", label: "החודש הנוכחי" },
-  { value: "prev_month", label: "החודש הקודם" },
-] as const;
-
-export type MarketingRangeKey = (typeof MARKETING_RANGE_OPTIONS)[number]["value"];
-
-export const DEFAULT_MARKETING_RANGE: MarketingRangeKey = "30d";
-
-export function isMarketingRangeKey(value: unknown): value is MarketingRangeKey {
-  return MARKETING_RANGE_OPTIONS.some((o) => o.value === value);
-}
-
-export type ResolvedMarketingRange = {
-  key: MarketingRangeKey;
-  label: string;
-  /** Plain YYYY-MM-DD, inclusive — for `date` columns (payments.paid_at, metric_date). */
-  sinceDate: string;
-  /** Plain YYYY-MM-DD, inclusive — for `date` columns. */
-  untilDate: string;
-  /** ISO timestamp, inclusive lower bound — for `timestamptz` columns. */
-  sinceTimestamp: string;
-  /** ISO timestamp, EXCLUSIVE upper bound (start of the day after untilDate) — for `timestamptz` columns. */
-  untilTimestampExclusive: string;
-};
 
 function toLocalDateOnly(y: number, m: number, d: number): Date {
   return new Date(y, m, d);
@@ -49,51 +28,6 @@ function toDateString(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
-}
-
-export function resolveMarketingRange(rawKey: string | undefined): ResolvedMarketingRange {
-  const key: MarketingRangeKey = isMarketingRangeKey(rawKey) ? rawKey : DEFAULT_MARKETING_RANGE;
-  const label = MARKETING_RANGE_OPTIONS.find((o) => o.value === key)!.label;
-
-  const now = new Date();
-  const today = toLocalDateOnly(now.getFullYear(), now.getMonth(), now.getDate());
-
-  let sinceDay: Date;
-  let untilDay: Date;
-
-  switch (key) {
-    case "7d":
-      untilDay = today;
-      sinceDay = toLocalDateOnly(today.getFullYear(), today.getMonth(), today.getDate() - 6);
-      break;
-    case "30d":
-      untilDay = today;
-      sinceDay = toLocalDateOnly(today.getFullYear(), today.getMonth(), today.getDate() - 29);
-      break;
-    case "month":
-      sinceDay = toLocalDateOnly(today.getFullYear(), today.getMonth(), 1);
-      untilDay = today;
-      break;
-    case "prev_month":
-      sinceDay = toLocalDateOnly(today.getFullYear(), today.getMonth() - 1, 1);
-      untilDay = toLocalDateOnly(today.getFullYear(), today.getMonth(), 0); // day 0 = last day of previous month
-      break;
-  }
-
-  const untilExclusiveDay = toLocalDateOnly(
-    untilDay.getFullYear(),
-    untilDay.getMonth(),
-    untilDay.getDate() + 1
-  );
-
-  return {
-    key,
-    label,
-    sinceDate: toDateString(sinceDay),
-    untilDate: toDateString(untilDay),
-    sinceTimestamp: sinceDay.toISOString(),
-    untilTimestampExclusive: untilExclusiveDay.toISOString(),
-  };
 }
 
 // ------------------------------------------------------------------

@@ -1,42 +1,39 @@
-import Link from "next/link";
 import {
   Wallet,
   UserPlus,
   Target,
   BadgeCheck,
-  HelpCircle,
-  Coins,
   Trophy,
+  Coins,
   TrendingUp,
 } from "lucide-react";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatMoney, formatDate } from "@/lib/crm/format";
-import {
-  MARKETING_RANGE_OPTIONS,
-  type ResolvedMarketingRange,
-} from "@/lib/crm/date-range";
+import { formatMoney } from "@/lib/crm/format";
+import { KpiCard, formatRatio } from "./business-report";
 import type { CampaignPeriodTotals } from "@/lib/crm/marketing";
 
-type MarketingStat = {
-  label: string;
-  value: string;
-  hint?: string;
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-};
-
+// "שיווק — [חודש נבחר]" — the dashboard's ONE marketing section. Every
+// figure here is scoped to the SAME selected month driving the rest of
+// the dashboard (?month=YYYY-MM at the top) — there is no independent
+// range control here (a previous version had its own 7d/30d/this-
+// month/last-month selector; removed so the page has exactly one time
+// context, not two). Same Meta-attribution rules as everywhere else in
+// this app (lib/crm/marketing.ts): a lead counts as Meta-attributed
+// only via a real META_AD touchpoint, CONFIRMED vs BROAD/UNKNOWN
+// certainty is read back verbatim, never upgraded/inferred.
 export type MarketingPerformanceData = {
-  range: ResolvedMarketingRange;
-  metaSpendMinor: number;
+  /** "אוגוסט 2026" — already formatted, drives the section title. */
+  monthLabel: string;
+  /** null = Meta sync never covered this month at all (unknown, NOT ₪0). */
+  metaSpendMinor: number | null;
   metaAccountIds: string[];
   newLeadsCount: number;
   metaAttributedLeadsCount: number;
   confirmedMetaLeadsCount: number;
   broadMetaLeadsCount: number;
   primaryCplMinor: number | null;
-  secondaryCplMinor: number | null;
-  wonCount: number;
-  revenueMinor: number;
+  metaAttributedWonCount: number;
   revenueToSpendRatio: number | null;
   confirmedMetaLeadsExistOverall: boolean;
   confirmedMetaRevenueMinor: number;
@@ -44,14 +41,9 @@ export type MarketingPerformanceData = {
   campaigns: CampaignPeriodTotals[];
 };
 
-function formatRatio(ratio: number | null): string {
-  if (ratio === null) return "—";
-  return `×${ratio.toFixed(2)}`;
-}
-
 export function MarketingPerformance({ data }: { data: MarketingPerformanceData }) {
   const {
-    range,
+    monthLabel,
     metaSpendMinor,
     metaAccountIds,
     newLeadsCount,
@@ -59,9 +51,7 @@ export function MarketingPerformance({ data }: { data: MarketingPerformanceData 
     confirmedMetaLeadsCount,
     broadMetaLeadsCount,
     primaryCplMinor,
-    secondaryCplMinor,
-    wonCount,
-    revenueMinor,
+    metaAttributedWonCount,
     revenueToSpendRatio,
     confirmedMetaLeadsExistOverall,
     confirmedMetaRevenueMinor,
@@ -69,121 +59,89 @@ export function MarketingPerformance({ data }: { data: MarketingPerformanceData 
     campaigns,
   } = data;
 
-  const stats: MarketingStat[] = [
-    {
-      label: "הוצאת פרסום במטא",
-      value: formatMoney(metaSpendMinor),
-      hint: `${metaAccountIds.length} חשבונות מטא מסונכרנים`,
-      icon: Wallet,
-    },
-    { label: "לידים חדשים", value: String(newLeadsCount), icon: UserPlus },
-    {
-      label: "לידים משויכים למטא",
-      value: String(metaAttributedLeadsCount),
-      hint: "לפחות נקודת מגע אחת מפרסומת במטא",
-      icon: Target,
-    },
-    {
-      label: "לידים מאומתים ממטא",
-      value: String(confirmedMetaLeadsCount),
-      hint: "ייחוס ודאי (CONFIRMED)",
-      icon: BadgeCheck,
-    },
-    {
-      label: "לידים לא ודאיים ממטא",
-      value: String(broadMetaLeadsCount),
-      hint: "ייחוס רחב / לא ודאי",
-      icon: HelpCircle,
-    },
-    {
-      label: "נסגרו (WON)",
-      value: String(wonCount),
-      hint: "מעבר לשלב נסגרה בטווח שנבחר",
-      icon: Trophy,
-    },
-    {
-      label: "הכנסות בפועל",
-      value: formatMoney(revenueMinor),
-      hint: "תשלומים ששולמו בפועל בלבד",
-      icon: Coins,
-    },
-  ];
-
   return (
     <div className="mt-8">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight text-zinc-900">
-            ביצועי שיווק
-          </h2>
-          <p className="mt-0.5 text-xs text-zinc-500">
-            הוצאה, לידים והכנסות עבור {range.label} · {formatDate(range.sinceDate)} –{" "}
-            {formatDate(range.untilDate)}
-          </p>
-        </div>
-        <RangeSwitcher activeKey={range.key} />
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold tracking-tight text-zinc-900">
+          שיווק — {monthLabel}
+        </h2>
+        <p className="mt-0.5 text-xs text-zinc-500">
+          הוצאת מטא, לידים והכנסות עבור החודש שנבחר למעלה — אותו חודש לכל הדוח.
+        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {stats.map((s) => (
-          <div
-            key={s.label}
-            className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm"
-          >
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                {s.label}
-              </p>
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
-                <s.icon className="h-4 w-4" strokeWidth={2} />
-              </div>
-            </div>
-            <p className="mt-3 text-2xl font-semibold tracking-tight text-zinc-900">
-              {s.value}
-            </p>
-            {s.hint && <p className="mt-1 text-xs text-zinc-500">{s.hint}</p>}
-          </div>
-        ))}
+        <KpiCard
+          icon={Wallet}
+          label="הוצאת פרסום במטא"
+          value={metaSpendMinor === null ? null : formatMoney(metaSpendMinor)}
+          unavailableText="אין נתוני סנכרון מטא לחודש זה"
+          hint={
+            metaAccountIds.length > 0
+              ? `${metaAccountIds.length} חשבונות מטא מסונכרנים`
+              : undefined
+          }
+        />
+        <KpiCard icon={UserPlus} label="לידים חדשים" value={String(newLeadsCount)} />
+        <KpiCard
+          icon={Target}
+          label="לידים משויכים למטא"
+          value={String(metaAttributedLeadsCount)}
+          hint={`כולל ${broadMetaLeadsCount} לא ודאיים (BROAD)`}
+        />
+        <KpiCard
+          icon={BadgeCheck}
+          label="לידים מאומתים ממטא"
+          value={String(confirmedMetaLeadsCount)}
+          hint="ייחוס ודאי (CONFIRMED)"
+        />
       </div>
 
-      {/* CPL + revenue ratios — separated from the raw counts above since
-          these are derived, guard-sensitive numbers with their own
-          honesty caveats. */}
+      {/* Derived, guard-sensitive numbers (CPL/WON/revenue/ROAS) —
+          separated from the raw counts above with their own honesty
+          caveats about when they're not yet reliably measurable. */}
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <RatioCard
+        <KpiCard
           icon={TrendingUp}
           label="עלות לליד מאומת (CPL)"
           value={primaryCplMinor === null ? null : formatMoney(primaryCplMinor)}
-          unavailableText="אין עדיין לידים מאומתים ממטא בטווח הזה"
+          unavailableText="אין עדיין לידים מאומתים ממטא החודש"
         />
-        <RatioCard
+        <KpiCard
+          icon={Trophy}
+          label="WON משויכים למטא"
+          value={String(metaAttributedWonCount)}
+          hint="לידים עם ייחוס מאומת שנסגרו החודש"
+        />
+        <KpiCard
+          icon={Coins}
+          label="הכנסה מאומתת ממטא"
+          value={formatMoney(confirmedMetaRevenueMinor)}
+          hint="תשלומים בחודש זה מלידים עם ייחוס מאומת"
+        />
+        <KpiCard
           icon={TrendingUp}
-          label="עלות לליד (רחב, פחות ודאי)"
-          value={secondaryCplMinor === null ? null : formatMoney(secondaryCplMinor)}
-          unavailableText="אין עדיין לידים משויכים למטא בטווח הזה"
-          muted
+          label="ROAS מאומת ממטא"
+          value={confirmedMetaLeadsExistOverall ? formatRatio(confirmedMetaRoas) : null}
+          unavailableText="עדיין לא ניתן למדידה אמינה — אין לידים עם ייחוס מאומת ממטא"
+          hint={
+            confirmedMetaLeadsExistOverall
+              ? 'לא לבלבל עם יחס הכנסות כלליות מול הוצאת מטא (למטה) — זהו ROAS על הכנסה מאומתת בלבד'
+              : undefined
+          }
         />
-        <RatioCard
+      </div>
+
+      {/* Overall business revenue / Meta spend — deliberately never
+          labeled "ROAS" (not all revenue is provably Meta-attributed;
+          the real ROAS card above is the only one allowed that name). */}
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard
           icon={TrendingUp}
           label="יחס הכנסות כלליות מול הוצאת מטא"
           value={revenueToSpendRatio === null ? null : formatRatio(revenueToSpendRatio)}
-          unavailableText="אין הוצאת מטא בטווח הזה"
-          note='זהו יחס בין כלל הכנסות העסק להוצאת מטא — לא "ROAS" של מטא, כי לא כל ההכנסה בהכרח הגיעה ממטא.'
-        />
-        <RatioCard
-          icon={TrendingUp}
-          label="ROAS מאומת ממטא"
-          value={
-            confirmedMetaLeadsExistOverall
-              ? formatRatio(confirmedMetaRoas)
-              : null
-          }
-          unavailableText="עדיין לא ניתן למדוד באופן אמין — אין לידים עם ייחוס מאומת ממטא"
-          note={
-            confirmedMetaLeadsExistOverall
-              ? `הכנסה מאומתת ממטא בטווח: ${formatMoney(confirmedMetaRevenueMinor)}`
-              : undefined
-          }
+          unavailableText="אין הוצאת מטא בחודש זה"
+          hint='יחס בין כלל הכנסות העסק להוצאת מטא — לא "ROAS" של מטא, כי לא כל ההכנסה בהכרח הגיעה ממטא.'
         />
       </div>
 
@@ -200,8 +158,8 @@ export function MarketingPerformance({ data }: { data: MarketingPerformanceData 
           <div className="p-5">
             <EmptyState
               icon={Target}
-              title="אין נתוני קמפיינים לטווח הזה"
-              description="קמפיינים עם הוצאה בטווח שנבחר יופיעו כאן."
+              title="אין נתוני קמפיינים לחודש הזה"
+              description="קמפיינים עם הוצאה בחודש שנבחר יופיעו כאן."
             />
           </div>
         ) : (
@@ -255,67 +213,6 @@ export function MarketingPerformance({ data }: { data: MarketingPerformanceData 
           </div>
         )}
       </Card>
-    </div>
-  );
-}
-
-function RangeSwitcher({ activeKey }: { activeKey: string }) {
-  return (
-    <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-zinc-200 bg-white p-1">
-      {MARKETING_RANGE_OPTIONS.map((opt) => (
-        <Link
-          key={opt.value}
-          href={`/dashboard?range=${opt.value}#marketing`}
-          className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-            opt.value === activeKey
-              ? "bg-rose-600 text-white"
-              : "text-zinc-600 hover:bg-zinc-50"
-          }`}
-        >
-          {opt.label}
-        </Link>
-      ))}
-    </div>
-  );
-}
-
-function RatioCard({
-  icon: Icon,
-  label,
-  value,
-  unavailableText,
-  note,
-  muted,
-}: {
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-  label: string;
-  value: string | null;
-  unavailableText: string;
-  note?: string;
-  muted?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-2xl border p-5 shadow-sm ${
-        muted ? "border-dashed border-zinc-200 bg-zinc-50/60" : "border-zinc-200 bg-white"
-      }`}
-    >
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-          {label}
-        </p>
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500">
-          <Icon className="h-4 w-4" strokeWidth={2} />
-        </div>
-      </div>
-      {value === null ? (
-        <p className="mt-3 text-sm text-zinc-400">{unavailableText}</p>
-      ) : (
-        <p className="mt-3 text-2xl font-semibold tracking-tight text-zinc-900">
-          {value}
-        </p>
-      )}
-      {note && <p className="mt-1 text-xs text-zinc-500">{note}</p>}
     </div>
   );
 }

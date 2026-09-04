@@ -22,7 +22,6 @@ import {
 } from "@/components/dashboard/marketing-performance";
 import { MonthlyPerformance } from "@/components/dashboard/monthly-performance";
 import { FinancialSummary, type FinancialSummaryData } from "@/components/dashboard/business-report";
-import { MonthlyMarketingKpis } from "@/components/dashboard/monthly-marketing-kpis";
 import { MonthSelector } from "@/components/dashboard/month-selector";
 import {
   LEAD_STAGE_LABELS,
@@ -31,7 +30,6 @@ import {
 } from "@/lib/crm/constants";
 import { formatDate, formatMoney, formatRelative } from "@/lib/crm/format";
 import {
-  resolveMarketingRange,
   resolveSelectedMonth,
   currentMonthKey,
   monthKeyOf,
@@ -40,8 +38,6 @@ import {
 } from "@/lib/crm/date-range";
 import {
   aggregateCampaignTotals,
-  classifyLeadAttribution,
-  safeDivide,
   buildMonthlyMetrics,
   type MetaDailyRow,
   type LeadTouchpointForAttribution,
@@ -89,26 +85,24 @@ type RecentPayment = {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ range?: string; month?: string }>;
+  searchParams: Promise<{ month?: string }>;
 }) {
-  const { range: rangeParam, month: monthParam } = await searchParams;
-  const range = resolveMarketingRange(rangeParam);
+  const { month: monthParam } = await searchParams;
+  // The selected month is the SINGLE time context for the entire
+  // dashboard — every month-dependent section below (KPI row,
+  // Marketing, the financial report) reads from this one value. There
+  // is no second independent date range anywhere on this page.
   const selectedMonth = resolveSelectedMonth(monthParam);
 
   const supabase = await createClient();
   const nowIso = new Date().toISOString();
 
   const [
-    newLeadsRes,
     followUpsDueRes,
     trialsBookedRes,
     recentLeadsRes,
     upcomingFollowUpsRes,
     recentPaymentsRes,
-    metaMetricsRes,
-    leadsInRangeWithTouchpointsRes,
-    wonEventsInRangeRes,
-    revenuePaymentsInRangeRes,
     confirmedMetaTouchpointsRes,
     allMetaRowsRes,
     allLeadsWithTouchpointsRes,
@@ -123,10 +117,6 @@ export default async function DashboardPage({
     allReferralsRes,
     allCustomersContactMapRes,
   ] = await Promise.all([
-    supabase
-      .from("leads")
-      .select("id", { count: "exact", head: true })
-      .eq("stage", "NEW"),
     supabase
       .from("follow_up_tasks")
       .select("id", { count: "exact", head: true })
@@ -160,41 +150,21 @@ export default async function DashboardPage({
       .order("paid_at", { ascending: false })
       .limit(5),
 
-    // ---- Marketing section (Phase 2), all scoped to the selected range ----
-    supabase
-      .from("meta_campaign_daily_metrics")
-      .select("meta_ad_account_id, campaign_id, campaign_name, metric_date, spend_minor, impressions, reach, clicks")
-      .gte("metric_date", range.sinceDate)
-      .lte("metric_date", range.untilDate),
-    supabase
-      .from("leads")
-      .select("id, touchpoints(channel, certainty)")
-      .gte("created_at", range.sinceTimestamp)
-      .lt("created_at", range.untilTimestampExclusive),
-    supabase
-      .from("lead_stage_events")
-      .select("id, lead_id")
-      .eq("to_stage", "WON")
-      .gte("changed_at", range.sinceTimestamp)
-      .lt("changed_at", range.untilTimestampExclusive),
-    supabase
-      .from("payments")
-      .select("amount, purchase_id")
-      .eq("status", "PAID")
-      .gte("paid_at", range.sinceDate)
-      .lte("paid_at", range.untilDate),
-    // Global (not range-scoped): whether ANY confirmed-Meta lead exists
+    // Global (not month-scoped): whether ANY confirmed-Meta lead exists
     // at all — a lead's confirmed attribution is a fixed property, not
-    // itself date-ranged; only the resulting revenue is range-filtered.
+    // itself date-ranged; only the resulting revenue is month-filtered
+    // (via buildMonthlyMetrics below).
     supabase
       .from("touchpoints")
       .select("lead_id")
       .eq("channel", "META_AD")
       .eq("certainty", "CONFIRMED"),
 
-    // ---- Monthly performance section — deliberately ALL-TIME (not
-    // range-scoped), so history isn't artificially cut at the current
-    // range selection. ----
+    // ---- Fetched ALL-TIME (not just the selected month): feeds both
+    // the historical trend table AND, filtered down to selectedMonth in
+    // JS below, every Marketing/KPI figure for the selected month —
+    // the dashboard's single time context. One fetch, no separate
+    // range-scoped queries. ----
     supabase
       .from("meta_campaign_daily_metrics")
       .select("meta_ad_account_id, campaign_id, campaign_name, metric_date, spend_minor, impressions, reach, clicks"),
@@ -250,60 +220,20 @@ export default async function DashboardPage({
     supabase.from("customers").select("id, contact_id"),
   ]);
 
-  // Meta spend + campaign table for the selected range.
-  const metaRows = (metaMetricsRes.data ?? []) as unknown as MetaDailyRow[];
-  const metaSpendMinor = metaRows.reduce((s, r) => s + r.spend_minor, 0);
-  const metaAccountIds = [...new Set(metaRows.map((r) => r.meta_ad_account_id))];
-  const campaigns = aggregateCampaignTotals(metaRows);
-
-  // New leads + Meta attribution classification for the selected range.
-  const leadsInRange = (leadsInRangeWithTouchpointsRes.data ?? []) as unknown as {
-    id: string;
-    touchpoints: LeadTouchpointForAttribution[];
-  }[];
-  const newLeadsCount = leadsInRange.length;
-  let confirmedMetaLeadsCount = 0;
-  let broadMetaLeadsCount = 0;
-  for (const lead of leadsInRange) {
-    const classification = classifyLeadAttribution(lead.touchpoints ?? []);
-    if (classification === "CONFIRMED_META") confirmedMetaLeadsCount += 1;
-    else if (classification === "BROAD_META") broadMetaLeadsCount += 1;
-  }
-  const metaAttributedLeadsCount = confirmedMetaLeadsCount + broadMetaLeadsCount;
-
-  const metaSpendNis = metaSpendMinor / 100;
-  const primaryCplNis = safeDivide(metaSpendNis, confirmedMetaLeadsCount);
-  const primaryCplMinor = primaryCplNis === null ? null : Math.round(primaryCplNis * 100);
-  const secondaryCplNis = safeDivide(metaSpendNis, metaAttributedLeadsCount);
-  const secondaryCplMinor = secondaryCplNis === null ? null : Math.round(secondaryCplNis * 100);
-
-  // WON transitions in range (via stage history, not current stage).
-  const wonInRangeCount = new Set(
-    (wonEventsInRangeRes.data ?? []).map((e) => e.lead_id)
-  ).size;
-
-  // Actual revenue in range (real payments only — never list price).
-  const revenueMinor = (revenuePaymentsInRangeRes.data ?? []).reduce(
-    (s, p) => s + p.amount,
-    0
-  );
-  const revenueToSpendRatio = safeDivide(revenueMinor, metaSpendMinor);
-
-  // Confirmed-Meta-attributed revenue: trace CONFIRMED META_AD leads ->
+  // Confirmed-Meta-attributed revenue traces CONFIRMED META_AD leads ->
   // their purchases (purchases.lead_id, set once at WON conversion) ->
-  // PAID payments on those purchases within the range. Schema supports
-  // this unambiguously (one lead_id per purchase); if no confirmed-Meta
+  // PAID payments on those purchases. Schema supports this
+  // unambiguously (one lead_id per purchase); if no confirmed-Meta
   // leads exist at all, the UI shows "not yet reliably measurable"
-  // rather than a fabricated 0/0 ratio.
+  // rather than a fabricated 0/0 ratio. Computed once, ALL-TIME (a
+  // lead's confirmed attribution is a fixed property, not itself
+  // date-ranged), then fed into buildMonthlyMetrics below so every
+  // month's row — including the selected one — recognizes the same
+  // purchases as confirmed-Meta-attributed.
   const confirmedMetaLeadIds = [
     ...new Set((confirmedMetaTouchpointsRes.data ?? []).map((t) => t.lead_id)),
   ];
   const confirmedMetaLeadsExistOverall = confirmedMetaLeadIds.length > 0;
-  // Purchase ids for confirmed-Meta leads — computed once, ALL-TIME (not
-  // range-scoped), then reused for both the selected-range card and the
-  // monthly breakdown below, so a purchase/payment is recognized as
-  // confirmed-Meta-attributed regardless of which range happens to be
-  // selected right now.
   let confirmedMetaPurchaseIds: string[] = [];
   if (confirmedMetaLeadsExistOverall) {
     const { data: purchasesForConfirmedLeads } = await supabase
@@ -312,20 +242,15 @@ export default async function DashboardPage({
       .in("lead_id", confirmedMetaLeadIds);
     confirmedMetaPurchaseIds = (purchasesForConfirmedLeads ?? []).map((p) => p.id);
   }
-  const confirmedMetaPurchaseIdSet = new Set(confirmedMetaPurchaseIds);
-  const confirmedMetaRevenueMinor = (revenuePaymentsInRangeRes.data ?? []).reduce(
-    (s, p) => (confirmedMetaPurchaseIdSet.has(p.purchase_id) ? s + p.amount : s),
-    0
-  );
-  const confirmedMetaRoas = confirmedMetaLeadsExistOverall
-    ? safeDivide(confirmedMetaRevenueMinor, metaSpendMinor)
-    : null;
 
-  // Monthly performance — real calendar months, all-time history (not
-  // cut at the currently-selected range), same attribution/formula
-  // rules as the range-scoped section above.
+  // Real calendar months, all-time history — one calculation feeds both
+  // the compact historical trend table AND (via selectedMonthRow below)
+  // every month-dependent figure on the rest of the page. This is the
+  // dashboard's single source of truth for "what happened in month X":
+  // there is no second, independently-scoped calculation anywhere else.
+  const allMetaRows = (allMetaRowsRes.data ?? []) as unknown as MetaDailyRow[];
   const monthlyMetrics = buildMonthlyMetrics({
-    metaRows: (allMetaRowsRes.data ?? []) as unknown as MetaDailyRow[],
+    metaRows: allMetaRows,
     leads: (allLeadsWithTouchpointsRes.data ?? []) as unknown as {
       id: string;
       created_at: string;
@@ -340,6 +265,13 @@ export default async function DashboardPage({
     previousMonthKeyOf,
     formatMonthLabel,
   });
+
+  // Campaign-level breakdown + synced-account count for the Marketing
+  // section — sliced from the SAME all-time Meta rows above down to the
+  // selected month, rather than a separate query with its own range.
+  const monthMetaRows = allMetaRows.filter((r) => monthKeyOf(r.metric_date) === selectedMonth.key);
+  const metaAccountIds = [...new Set(monthMetaRows.map((r) => r.meta_ad_account_id))];
+  const campaigns = aggregateCampaignTotals(monthMetaRows);
 
   // ================================================================
   // Monthly Business Report (selectedMonth) — reuses the SAME
@@ -454,22 +386,25 @@ export default async function DashboardPage({
     expenses: (businessExpensesInMonthRes.data ?? []) as FinancialSummaryData["expenses"],
   };
 
+  // Marketing section data — entirely selectedMonthRow (already computed
+  // by buildMonthlyMetrics above for exactly this month) plus the two
+  // fields that row doesn't carry: the campaign table/account count
+  // (sliced from all-time Meta rows just above) and metaAttributedWonCount
+  // (computed just above too). No independent range anywhere here.
   const marketingData: MarketingPerformanceData = {
-    range,
-    metaSpendMinor,
+    monthLabel: selectedMonth.label,
+    metaSpendMinor: selectedMonthRow.metaSpendMinor,
     metaAccountIds,
-    newLeadsCount,
-    metaAttributedLeadsCount,
-    confirmedMetaLeadsCount,
-    broadMetaLeadsCount,
-    primaryCplMinor,
-    secondaryCplMinor,
-    wonCount: wonInRangeCount,
-    revenueMinor,
-    revenueToSpendRatio,
+    newLeadsCount: selectedMonthRow.newLeadsCount,
+    metaAttributedLeadsCount: selectedMonthRow.metaAttributedLeadsCount,
+    confirmedMetaLeadsCount: selectedMonthRow.confirmedMetaLeadsCount,
+    broadMetaLeadsCount: selectedMonthRow.broadMetaLeadsCount,
+    primaryCplMinor: selectedMonthRow.primaryCplMinor,
+    metaAttributedWonCount,
+    revenueToSpendRatio: selectedMonthRow.revenueToSpendRatio,
     confirmedMetaLeadsExistOverall,
-    confirmedMetaRevenueMinor,
-    confirmedMetaRoas,
+    confirmedMetaRevenueMinor: selectedMonthRow.confirmedMetaRevenueMinor,
+    confirmedMetaRoas: selectedMonthRow.confirmedMetaRoas,
     campaigns,
   };
 
@@ -492,10 +427,10 @@ export default async function DashboardPage({
         }
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-7">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard
-          label="לידים חדשים (ממתינים)"
-          value={String(newLeadsRes.count ?? 0)}
+          label="לידים חדשים בחודש"
+          value={String(salesFunnel.newLeadsCount)}
           icon={UserPlus}
           tone="accent"
         />
@@ -508,11 +443,6 @@ export default async function DashboardPage({
           label="אימוני ניסיון שנקבעו"
           value={String(trialsBookedRes.count ?? 0)}
           icon={Dumbbell}
-        />
-        <StatCard
-          label="לידים חדשים בחודש"
-          value={String(salesFunnel.newLeadsCount)}
-          icon={UserPlus}
         />
         <StatCard
           label="לקוחות חדשות בחודש"
@@ -731,22 +661,19 @@ export default async function DashboardPage({
       </div>
 
       <div id="marketing" className="mt-8">
-        <MonthlyMarketingKpis
-          confirmedMetaLeadsCount={selectedMonthRow.confirmedMetaLeadsCount}
-          broadMetaLeadsCount={selectedMonthRow.broadMetaLeadsCount}
-          metaAttributedLeadsCount={selectedMonthRow.metaAttributedLeadsCount}
-          primaryCplMinor={selectedMonthRow.primaryCplMinor}
-          metaAttributedWonCount={metaAttributedWonCount}
-          confirmedMetaRevenueMinor={selectedMonthRow.confirmedMetaRevenueMinor}
-          confirmedMetaRoas={selectedMonthRow.confirmedMetaRoas}
-          confirmedMetaLeadsExistOverall={confirmedMetaLeadsExistOverall}
-        />
         <MarketingPerformance data={marketingData} />
-        <MonthlyPerformance months={monthlyMetrics} />
       </div>
 
       <div className="mt-8">
         <FinancialSummary data={financialSummaryData} />
+      </div>
+
+      {/* Compact historical trend — real calendar months, all-time.
+          Deliberately last: it compares months rather than reporting on
+          the selected one, so it stays a footer, never competing
+          visually with the selected-month sections above. */}
+      <div className="mt-8">
+        <MonthlyPerformance months={monthlyMetrics} />
       </div>
     </div>
   );

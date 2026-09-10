@@ -175,9 +175,11 @@ export type ProcessOutcome =
   | { outcome: "in_progress_elsewhere"; ingestionId: string }
   | { outcome: "failed"; ingestionId: string; errorMessage: string };
 
-const FALLBACK_FULL_NAME = "ליד ממטא (ללא שם)"; // contacts.full_name is NOT NULL; Meta almost
+// contacts.full_name is NOT NULL; Meta (and Zapier — see
+// lib/meta/zapier-ingest.ts, which reuses this same constant) almost
 // always supplies a name, but this guarantees the constraint is met on
 // the rare submission that doesn't.
+export const FALLBACK_FULL_NAME = "ליד ממטא (ללא שם)";
 
 function buildTouchpointMetadata(
   row: IngestionRow,

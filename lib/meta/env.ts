@@ -42,3 +42,22 @@ export function getMetaWebhookVerifyToken(): string {
   }
   return token;
 }
+
+// Shared secret authenticating POSTs from the Zapier "Webhooks by
+// Zapier" action (Facebook Lead Ads trigger -> POST to
+// /api/zapier/facebook-leads) — see lib/meta/zapier-auth.ts. Unrelated
+// to META_APP_SECRET: Zapier is not Meta, cannot compute Meta's
+// X-Hub-Signature-256 HMAC, and this endpoint is a distinct trust
+// boundary from the direct Meta webhook route.
+export function getZapierLeadWebhookSecret(): string {
+  const secret = process.env.ZAPIER_LEAD_WEBHOOK_SECRET;
+  if (!secret) {
+    throw new Error(
+      "Missing ZAPIER_LEAD_WEBHOOK_SECRET server environment variable. " +
+        "Required to authenticate POSTs to /api/zapier/facebook-leads — " +
+        "without it, the route fails closed (500) rather than accepting " +
+        "any caller."
+    );
+  }
+  return secret;
+}

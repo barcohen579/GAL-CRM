@@ -12,6 +12,7 @@ import {
   PAYMENT_STATUS_LABELS,
   PAYMENT_STATUS_TONE,
   PAYMENT_METHOD_LABELS,
+  PAYMENT_CONTEXT_LABELS,
 } from "@/lib/crm/constants";
 import { formatDate, formatMoney, startOfMonthISO } from "@/lib/crm/format";
 import type { PaymentWithRelations, PurchaseSummary } from "@/lib/crm/types";
@@ -26,7 +27,7 @@ export default async function PaymentsPage() {
     supabase
       .from("payments")
       .select(
-        `id, amount, currency, paid_at, method, status, is_auto_generated,
+        `id, amount, currency, paid_at, method, status, notes, is_auto_generated, payment_context,
          purchase:purchases(id, service_type, custom_service_name, customer:customers(id, contact:contacts(full_name)))`
       )
       .order("paid_at", { ascending: false }),
@@ -108,33 +109,49 @@ export default async function PaymentsPage() {
                 className="flex items-center justify-between gap-4 px-5 py-3.5"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-zinc-900">
-                    {payment.purchase?.custom_service_name ??
-                      (payment.purchase
-                        ? SERVICE_TYPE_LABELS[payment.purchase.service_type]
-                        : "שירות לא ידוע")}
-                  </p>
-                  <p className="truncate text-xs text-zinc-500">
-                    {payment.purchase?.customer ? (
-                      <Link
-                        href={`/customers/${payment.purchase.customer.id}`}
-                        className="hover:text-rose-600 hover:underline"
-                      >
-                        {payment.purchase.customer.contact?.full_name ?? "לקוחה לא ידועה"}
-                      </Link>
-                    ) : (
-                      "לקוחה לא ידועה"
-                    )}
-                    {" · "}
-                    {formatDate(payment.paid_at)}
-                    {" · "}
-                    {PAYMENT_METHOD_LABELS[payment.method] ?? payment.method}
-                  </p>
+                  {payment.payment_context === "GENERAL" ? (
+                    <>
+                      <p className="truncate text-sm font-medium text-zinc-900">{payment.notes}</p>
+                      <p className="truncate text-xs text-zinc-500">
+                        {formatDate(payment.paid_at)}
+                        {" · "}
+                        {PAYMENT_METHOD_LABELS[payment.method] ?? payment.method}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="truncate text-sm font-medium text-zinc-900">
+                        {payment.purchase?.custom_service_name ??
+                          (payment.purchase
+                            ? SERVICE_TYPE_LABELS[payment.purchase.service_type]
+                            : "שירות לא ידוע")}
+                      </p>
+                      <p className="truncate text-xs text-zinc-500">
+                        {payment.purchase?.customer ? (
+                          <Link
+                            href={`/customers/${payment.purchase.customer.id}`}
+                            className="hover:text-rose-600 hover:underline"
+                          >
+                            {payment.purchase.customer.contact?.full_name ?? "לקוחה לא ידועה"}
+                          </Link>
+                        ) : (
+                          "לקוחה לא ידועה"
+                        )}
+                        {" · "}
+                        {formatDate(payment.paid_at)}
+                        {" · "}
+                        {PAYMENT_METHOD_LABELS[payment.method] ?? payment.method}
+                      </p>
+                    </>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="text-sm font-semibold text-zinc-900">
                     {formatMoney(payment.amount, payment.currency)}
                   </span>
+                  <Badge tone={payment.payment_context === "GENERAL" ? "neutral" : "info"}>
+                    {PAYMENT_CONTEXT_LABELS[payment.payment_context] ?? payment.payment_context}
+                  </Badge>
                   <Badge tone={PAYMENT_STATUS_TONE[payment.status] ?? "neutral"}>
                     {PAYMENT_STATUS_LABELS[payment.status] ?? payment.status}
                   </Badge>

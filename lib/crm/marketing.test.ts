@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyLeadAttribution, buildMonthlyMetrics } from "./marketing.ts";
+import { classifyLeadAttribution, buildMonthlyMetrics, computeCurrentPeriodBusinessSnapshot } from "./marketing.ts";
 import { monthKeyOf, previousMonthKeyOf, formatMonthLabel } from "./date-range.ts";
 
 // Referral-relevant coverage for classifyLeadAttribution. This module had
@@ -233,4 +233,154 @@ test("buildMonthlyMetrics: a month with ONLY a business expense (no leads/paymen
   const row = result.find((r) => r.monthKey === key);
   assert.ok(row, "a month with only an expense must still appear");
   assert.equal(row!.otherExpensesMinor, 15000);
+});
+
+// ------------------------------------------------------------------
+// computeCurrentPeriodBusinessSnapshot — "מגמת העסק"'s current-partial-
+// period vs same-date-range-last-month comparison. Uses real relative
+// month keys (baseArgs.currentMonthKey / previousMonthKeyOf), same
+// "never a hardcoded absolute date" convention as monthsAgoKey above —
+// day 15 is deliberately chosen as "today" so every scenario is valid
+// regardless of which real month the test suite happens to run in
+// (every calendar month has at least 28 days).
+// ------------------------------------------------------------------
+
+test("computeCurrentPeriodBusinessSnapshot: only counts up-to-today rows in the current month, and up-to-the-same-day rows in the previous month — a later date in either month is excluded", () => {
+  const currentKey = baseArgs.currentMonthKey;
+  const prevKey = previousMonthKeyOf(currentKey);
+  const todayDateKey = `${currentKey}-15`;
+
+  const result = computeCurrentPeriodBusinessSnapshot({
+    payments: [
+      { amount: 10000, paid_at: `${currentKey}-05` },
+      { amount: 5000, paid_at: `${currentKey}-15` }, // exactly today -- included
+      { amount: 99999, paid_at: `${currentKey}-16` }, // AFTER today -- must be excluded
+      { amount: 8000, paid_at: `${prevKey}-05` },
+      { amount: 4000, paid_at: `${prevKey}-15` }, // exactly the capped day -- included
+      { amount: 77777, paid_at: `${prevKey}-16` }, // AFTER the capped day -- excluded
+    ],
+    businessExpenses: [],
+    metaRows: [],
+    todayDateKey,
+    monthKeyOf,
+    previousMonthKeyOf,
+  });
+
+  assert.equal(result.currentRangeStart, `${currentKey}-01`);
+  assert.equal(result.currentRangeEnd, todayDateKey);
+  assert.equal(result.previousRangeStart, `${prevKey}-01`);
+  assert.equal(result.previousRangeEnd, `${prevKey}-15`);
+  assert.equal(result.revenue.currentMinor, 15000);
+  assert.equal(result.revenue.previousMinor, 12000);
+});
+
+test("computeCurrentPeriodBusinessSnapshot: positive revenue growth", () => {
+  const currentKey = baseArgs.currentMonthKey;
+  const prevKey = previousMonthKeyOf(currentKey);
+  const result = computeCurrentPeriodBusinessSnapshot({
+    payments: [
+      { amount: 20000, paid_at: `${currentKey}-10` },
+      { amount: 10000, paid_at: `${prevKey}-10` },
+    ],
+    businessExpenses: [],
+    metaRows: [],
+    todayDateKey: `${currentKey}-10`,
+    monthKeyOf,
+    previousMonthKeyOf,
+  });
+  assert.equal(result.revenue.change?.direction, "up");
+  assert.equal(result.revenue.change?.percent, 100);
+});
+
+test("computeCurrentPeriodBusinessSnapshot: negative revenue growth", () => {
+  const currentKey = baseArgs.currentMonthKey;
+  const prevKey = previousMonthKeyOf(currentKey);
+  const result = computeCurrentPeriodBusinessSnapshot({
+    payments: [
+      { amount: 5000, paid_at: `${currentKey}-10` },
+      { amount: 20000, paid_at: `${prevKey}-10` },
+    ],
+    businessExpenses: [],
+    metaRows: [],
+    todayDateKey: `${currentKey}-10`,
+    monthKeyOf,
+    previousMonthKeyOf,
+  });
+  assert.equal(result.revenue.change?.direction, "down");
+  assert.equal(result.revenue.change?.percent, -75);
+});
+
+test("computeCurrentPeriodBusinessSnapshot: no change (flat)", () => {
+  const currentKey = baseArgs.currentMonthKey;
+  const prevKey = previousMonthKeyOf(currentKey);
+  const result = computeCurrentPeriodBusinessSnapshot({
+    payments: [
+      { amount: 10000, paid_at: `${currentKey}-10` },
+      { amount: 10000, paid_at: `${prevKey}-10` },
+    ],
+    businessExpenses: [],
+    metaRows: [],
+    todayDateKey: `${currentKey}-10`,
+    monthKeyOf,
+    previousMonthKeyOf,
+  });
+  assert.equal(result.revenue.change?.direction, "flat");
+  assert.equal(result.revenue.change?.percent, 0);
+});
+
+test("computeCurrentPeriodBusinessSnapshot: zero previous-period revenue -> change is null, never NaN/Infinity", () => {
+  const currentKey = baseArgs.currentMonthKey;
+  const result = computeCurrentPeriodBusinessSnapshot({
+    payments: [{ amount: 10000, paid_at: `${currentKey}-10` }],
+    businessExpenses: [],
+    metaRows: [],
+    todayDateKey: `${currentKey}-10`,
+    monthKeyOf,
+    previousMonthKeyOf,
+  });
+  assert.equal(result.revenue.previousMinor, 0);
+  assert.equal(result.revenue.change, null);
+  assert.ok(Number.isFinite(result.revenue.currentMinor));
+});
+
+test("computeCurrentPeriodBusinessSnapshot: a GENERAL payment (no purchase_id in the shape at all) is included in revenue exactly like any other PAID payment", () => {
+  const currentKey = baseArgs.currentMonthKey;
+  // No purchase_id field anywhere -- this function's own payments param
+  // type never requires one, so a GENERAL-payment-shaped row is
+  // indistinguishable from a CUSTOMER one here by construction.
+  const result = computeCurrentPeriodBusinessSnapshot({
+    payments: [{ amount: 30000, paid_at: `${currentKey}-10` }],
+    businessExpenses: [],
+    metaRows: [],
+    todayDateKey: `${currentKey}-10`,
+    monthKeyOf,
+    previousMonthKeyOf,
+  });
+  assert.equal(result.revenue.currentMinor, 30000);
+});
+
+test("computeCurrentPeriodBusinessSnapshot: expenses = Meta spend + business expenses, and profit = revenue - expenses, for both periods", () => {
+  const currentKey = baseArgs.currentMonthKey;
+  const prevKey = previousMonthKeyOf(currentKey);
+  const result = computeCurrentPeriodBusinessSnapshot({
+    payments: [
+      { amount: 50000, paid_at: `${currentKey}-10` },
+      { amount: 40000, paid_at: `${prevKey}-10` },
+    ],
+    businessExpenses: [
+      { amount_minor: 5000, expense_date: `${currentKey}-10` },
+      { amount_minor: 3000, expense_date: `${prevKey}-10` },
+    ],
+    metaRows: [
+      { spend_minor: 2000, metric_date: `${currentKey}-10` },
+      { spend_minor: 1000, metric_date: `${prevKey}-10` },
+    ],
+    todayDateKey: `${currentKey}-10`,
+    monthKeyOf,
+    previousMonthKeyOf,
+  });
+  assert.equal(result.expenses.currentMinor, 7000, "current expenses = business (5000) + Meta (2000)");
+  assert.equal(result.expenses.previousMinor, 4000, "previous expenses = business (3000) + Meta (1000)");
+  assert.equal(result.profit.currentMinor, 43000, "current profit = revenue (50000) - expenses (7000)");
+  assert.equal(result.profit.previousMinor, 36000, "previous profit = revenue (40000) - expenses (4000)");
 });

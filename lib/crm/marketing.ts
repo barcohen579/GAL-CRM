@@ -215,7 +215,13 @@ export function buildMonthlyMetrics(input: {
   metaRows: MetaDailyRow[];
   leads: { id: string; created_at: string; touchpoints: LeadTouchpointForAttribution[] }[];
   wonEvents: { lead_id: string; changed_at: string }[];
-  payments: { amount: number; paid_at: string; purchase_id: string }[];
+  // purchase_id is null for a GENERAL payment (see
+  // supabase/migrations/20260911140000_..._general_payments.sql) — it
+  // still counts fully toward revenueMinor below (the loop has no
+  // purchase-linkage requirement); confirmedPurchaseIdSet.has(null) is
+  // simply false, exactly the right "never Meta-attributed" answer for
+  // a general payment.
+  payments: { amount: number; paid_at: string; purchase_id: string | null }[];
   confirmedMetaPurchaseIds: string[];
   /** Manually-entered business_expenses rows — never Meta spend. */
   businessExpenses?: { amount_minor: number; expense_date: string }[];
@@ -327,7 +333,7 @@ export function buildMonthlyMetrics(input: {
     const bucket = perMonth.get(key);
     if (!bucket) continue;
     bucket.revenueMinor += p.amount;
-    if (confirmedPurchaseIdSet.has(p.purchase_id)) bucket.confirmedMetaRevenueMinor += p.amount;
+    if (p.purchase_id && confirmedPurchaseIdSet.has(p.purchase_id)) bucket.confirmedMetaRevenueMinor += p.amount;
   }
 
   // Whether ANY confirmed-Meta lead exists at all (globally) determines
@@ -430,4 +436,143 @@ export function buildMonthlyMetrics(input: {
     .sort((a, b) => b.monthKey.localeCompare(a.monthKey)); // newest first for display
 
   return results;
+}
+
+// ------------------------------------------------------------------
+// "מגמת העסק" — current-partial-month vs SAME-date-range previous month.
+//
+// buildMonthlyMetrics's own changeVsPreviousMonth is deliberately null
+// for the current month (see its own comment above): comparing a
+// partial month's total against an entire previous month is misleading
+// (a real drop can read as a huge, alarming swing). This is the
+// dedicated, honest comparison for exactly that case — "day 1..today of
+// this month" vs "day 1..(the same day number, clamped to that month's
+// real length) of the previous month" — reusing monthOverMonthChange
+// (already null-safe for a zero/absent previous period, so no new
+// NaN/Infinity handling is needed here either).
+// ------------------------------------------------------------------
+
+export type PeriodComparison = {
+  currentMinor: number;
+  previousMinor: number;
+  change: MonthOverMonthChange;
+};
+
+export type CurrentPeriodBusinessSnapshot = {
+  /** Israel-calendar "YYYY-MM-DD" dateKeys (see lib/crm/timezone.ts's
+   *  zonedParts) — the exact partial range being compared, for the UI's
+   *  own label if it wants to render it. */
+  currentRangeStart: string;
+  currentRangeEnd: string;
+  previousRangeStart: string;
+  previousRangeEnd: string;
+  revenue: PeriodComparison;
+  /** Meta spend + business expenses in the range — same definition as
+   *  MonthlyMetrics.totalExpensesMinor, just summed over a partial
+   *  range instead of a whole month. Not null-guarded for "Meta unsynced
+   *  this range" the way the whole-month figure is: this is a secondary/
+   *  optional metric, and the Dashboard's own auto-sync-on-open keeps
+   *  Meta data for the current period fresh in practice. */
+  expenses: PeriodComparison;
+  profit: PeriodComparison;
+};
+
+function sumInDateRange<T>(
+  rows: T[],
+  dateOf: (row: T) => string,
+  amountOf: (row: T) => number,
+  monthKeyOf: (value: string) => string,
+  rangeMonthKey: string,
+  rangeEndDateKey: string
+): number {
+  let sum = 0;
+  for (const row of rows) {
+    const d = dateOf(row);
+    // Both bounds are plain "YYYY-MM-DD" strings, which compare
+    // correctly with <= lexicographically — same convention already
+    // used throughout this codebase for date-only columns.
+    if (monthKeyOf(d) === rangeMonthKey && d <= rangeEndDateKey) sum += amountOf(row);
+  }
+  return sum;
+}
+
+export function computeCurrentPeriodBusinessSnapshot(input: {
+  /** Pre-filtered to PAID by the caller — same convention as
+   *  buildMonthlyMetrics's own `payments` param. Includes GENERAL
+   *  payments (purchase_id doesn't matter to this function at all). */
+  payments: { amount: number; paid_at: string }[];
+  businessExpenses: { amount_minor: number; expense_date: string }[];
+  metaRows: { spend_minor: number; metric_date: string }[];
+  /** Israel-calendar "today", e.g. zonedParts(new Date(), ISRAEL_TIME_ZONE).dateKey. */
+  todayDateKey: string;
+  monthKeyOf: (value: string) => string;
+  previousMonthKeyOf: (key: string) => string;
+}): CurrentPeriodBusinessSnapshot {
+  const { payments, businessExpenses, metaRows, todayDateKey, monthKeyOf, previousMonthKeyOf } = input;
+
+  const currentMonthKey = monthKeyOf(todayDateKey);
+  const [, , dayStr] = todayDateKey.split("-");
+  const dayOfMonth = Number(dayStr);
+
+  const prevKey = previousMonthKeyOf(currentMonthKey);
+  const [prevYear, prevMonth] = prevKey.split("-").map(Number);
+  // Day 0 of the (1-based) next month = the last real day of prevMonth
+  // — clamps e.g. "day 31" against a previous month that only has 28/30
+  // days to that month's own real last day, rather than overflowing
+  // into the month after it.
+  const previousMonthLastDay = new Date(prevYear, prevMonth, 0).getDate();
+  const cappedDay = Math.min(dayOfMonth, previousMonthLastDay);
+
+  const currentRangeStart = `${currentMonthKey}-01`;
+  const previousRangeStart = `${prevKey}-01`;
+  const previousRangeEnd = `${prevKey}-${String(cappedDay).padStart(2, "0")}`;
+
+  const currentRevenueMinor = sumInDateRange(
+    payments,
+    (p) => p.paid_at,
+    (p) => p.amount,
+    monthKeyOf,
+    currentMonthKey,
+    todayDateKey
+  );
+  const previousRevenueMinor = sumInDateRange(
+    payments,
+    (p) => p.paid_at,
+    (p) => p.amount,
+    monthKeyOf,
+    prevKey,
+    previousRangeEnd
+  );
+
+  const currentExpensesMinor =
+    sumInDateRange(businessExpenses, (e) => e.expense_date, (e) => e.amount_minor, monthKeyOf, currentMonthKey, todayDateKey) +
+    sumInDateRange(metaRows, (r) => r.metric_date, (r) => r.spend_minor, monthKeyOf, currentMonthKey, todayDateKey);
+  const previousExpensesMinor =
+    sumInDateRange(businessExpenses, (e) => e.expense_date, (e) => e.amount_minor, monthKeyOf, prevKey, previousRangeEnd) +
+    sumInDateRange(metaRows, (r) => r.metric_date, (r) => r.spend_minor, monthKeyOf, prevKey, previousRangeEnd);
+
+  const currentProfitMinor = currentRevenueMinor - currentExpensesMinor;
+  const previousProfitMinor = previousRevenueMinor - previousExpensesMinor;
+
+  return {
+    currentRangeStart,
+    currentRangeEnd: todayDateKey,
+    previousRangeStart,
+    previousRangeEnd,
+    revenue: {
+      currentMinor: currentRevenueMinor,
+      previousMinor: previousRevenueMinor,
+      change: monthOverMonthChange(currentRevenueMinor, previousRevenueMinor),
+    },
+    expenses: {
+      currentMinor: currentExpensesMinor,
+      previousMinor: previousExpensesMinor,
+      change: monthOverMonthChange(currentExpensesMinor, previousExpensesMinor),
+    },
+    profit: {
+      currentMinor: currentProfitMinor,
+      previousMinor: previousProfitMinor,
+      change: monthOverMonthChange(currentProfitMinor, previousProfitMinor),
+    },
+  };
 }

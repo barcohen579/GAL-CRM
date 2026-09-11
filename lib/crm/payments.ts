@@ -76,3 +76,58 @@ export function validatePurchaseOwnership(
   }
   return { ok: true };
 }
+
+// ------------------------------------------------------------------
+// General payments — real PAID revenue not tied to any Customer/
+// Purchase (a one-off workshop, event income, ...). See
+// supabase/migrations/20260911140000_..._general_payments.sql: the
+// payments table now allows purchase_id to be null when
+// payment_context = 'GENERAL', enforced by a DB CHECK constraint (this
+// function's own required-description check is the same rule, kept in
+// sync deliberately — the DB is the actual backstop, this is what lets
+// the UI show a fast, friendly error before ever reaching it).
+// ------------------------------------------------------------------
+
+export type ParsedGeneralPaymentInput =
+  | { error: string }
+  | {
+      amountMinor: number;
+      paidAt: string;
+      method: string;
+      status: string;
+      /** Required and non-empty — this is the only thing that will ever
+       *  explain what a GENERAL payment was for. */
+      notes: string;
+    };
+
+export type RawGeneralPaymentFields = {
+  amountRaw: string | null;
+  paidAt: string | null;
+  method: string | null;
+  status: string | null;
+  notes: string | null;
+};
+
+export function parseGeneralPaymentInput(fields: RawGeneralPaymentFields): ParsedGeneralPaymentInput {
+  if (!fields.amountRaw) return { error: "יש להזין סכום." };
+
+  const amountNis = Number(fields.amountRaw.replace(/,/g, ""));
+  if (!Number.isFinite(amountNis) || amountNis < 0) {
+    return { error: "הסכום שהוזן אינו תקין." };
+  }
+  const amountMinor = Math.round(amountNis * 100);
+
+  if (!fields.paidAt) return { error: "יש לבחור תאריך תשלום." };
+  if (!fields.method) return { error: "יש לבחור אמצעי תשלום." };
+
+  const notes = fields.notes?.trim() ?? "";
+  if (!notes) return { error: "יש להזין תיאור עבור תשלום כללי." };
+
+  return {
+    amountMinor,
+    paidAt: fields.paidAt,
+    method: fields.method,
+    status: fields.status ?? "PAID",
+    notes,
+  };
+}

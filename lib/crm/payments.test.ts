@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseManualPaymentInput, validatePurchaseOwnership } from "./payments.ts";
+import { parseGeneralPaymentInput, parseManualPaymentInput, validatePurchaseOwnership } from "./payments.ts";
 
 function validFields(overrides: Partial<Parameters<typeof parseManualPaymentInput>[0]> = {}) {
   return {
@@ -91,4 +91,53 @@ test("validatePurchaseOwnership: a Purchase that doesn't exist at all is rejecte
 test("validatePurchaseOwnership: no customerId supplied (e.g. legacy caller) does not itself reject an existing purchase", () => {
   const result = validatePurchaseOwnership({ customer_id: "customer-2" }, null);
   assert.equal(result.ok, true);
+});
+
+function validGeneralFields(overrides: Partial<Parameters<typeof parseGeneralPaymentInput>[0]> = {}) {
+  return {
+    amountRaw: "500",
+    paidAt: "2026-09-11",
+    method: "CASH",
+    status: null,
+    notes: "הכנסה מאירוע",
+    ...overrides,
+  };
+}
+
+test("parseGeneralPaymentInput: a valid general payment (no Customer/Purchase needed) parses correctly", () => {
+  const parsed = parseGeneralPaymentInput(validGeneralFields());
+  assert.ok(!("error" in parsed));
+  if ("error" in parsed) return;
+  assert.equal(parsed.amountMinor, 50000);
+  assert.equal(parsed.paidAt, "2026-09-11");
+  assert.equal(parsed.method, "CASH");
+  assert.equal(parsed.status, "PAID");
+  assert.equal(parsed.notes, "הכנסה מאירוע");
+});
+
+test("parseGeneralPaymentInput: a missing description is rejected", () => {
+  assert.ok("error" in parseGeneralPaymentInput(validGeneralFields({ notes: null })));
+});
+
+test("parseGeneralPaymentInput: a description that's only whitespace is rejected (not just 'missing')", () => {
+  assert.ok("error" in parseGeneralPaymentInput(validGeneralFields({ notes: "   " })));
+});
+
+test("parseGeneralPaymentInput: missing amount is rejected", () => {
+  assert.ok("error" in parseGeneralPaymentInput(validGeneralFields({ amountRaw: null })));
+});
+
+test("parseGeneralPaymentInput: missing paid_at is rejected", () => {
+  assert.ok("error" in parseGeneralPaymentInput(validGeneralFields({ paidAt: null })));
+});
+
+test("parseGeneralPaymentInput: missing method is rejected", () => {
+  assert.ok("error" in parseGeneralPaymentInput(validGeneralFields({ method: null })));
+});
+
+test("parseGeneralPaymentInput: an explicit status overrides the PAID default", () => {
+  const parsed = parseGeneralPaymentInput(validGeneralFields({ status: "REFUNDED" }));
+  assert.ok(!("error" in parsed));
+  if ("error" in parsed) return;
+  assert.equal(parsed.status, "REFUNDED");
 });

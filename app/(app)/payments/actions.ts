@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { firstOfMonth } from "@/lib/crm/recurring";
-import { parseManualPaymentInput, validatePurchaseOwnership } from "@/lib/crm/payments";
+import {
+  parseGeneralPaymentInput,
+  parseManualPaymentInput,
+  validatePurchaseOwnership,
+} from "@/lib/crm/payments";
 
 function optionalString(value: FormDataEntryValue | null): string | null {
   const s = typeof value === "string" ? value.trim() : "";
@@ -30,6 +34,46 @@ export async function recordPayment(
   _prevState: RecordPaymentState,
   formData: FormData
 ): Promise<RecordPaymentState> {
+  // Absent on every existing caller (the customer-detail-page
+  // RecordPaymentDialog never sends this field) -> defaults to
+  // CUSTOMER, so that flow is 100% unaffected by this branch existing.
+  const paymentContext = optionalString(formData.get("payment_context")) ?? "CUSTOMER";
+
+  if (paymentContext === "GENERAL") {
+    const parsed = parseGeneralPaymentInput({
+      amountRaw: optionalString(formData.get("amount")),
+      paidAt: optionalString(formData.get("paid_at")),
+      method: optionalString(formData.get("method")),
+      status: optionalString(formData.get("status")),
+      notes: optionalString(formData.get("notes")),
+    });
+    if ("error" in parsed) return { error: parsed.error };
+
+    const supabase = await createClient();
+    const { error } = await supabase.from("payments").insert({
+      payment_context: "GENERAL",
+      purchase_id: null,
+      amount: parsed.amountMinor,
+      currency: "ILS",
+      paid_at: parsed.paidAt,
+      method: parsed.method,
+      status: parsed.status,
+      notes: parsed.notes,
+      billing_cycle: null,
+      is_auto_generated: false,
+    });
+
+    if (error) {
+      return { error: `לא הצלחנו לשמור את התשלום: ${error.message}` };
+    }
+
+    // A general payment has no Customer of its own to revalidate.
+    revalidatePath("/payments");
+    revalidatePath("/dashboard");
+
+    return { error: null, success: true };
+  }
+
   const parsed = parseManualPaymentInput({
     purchaseId: optionalString(formData.get("purchase_id")),
     customerId: optionalString(formData.get("customer_id")),
@@ -71,6 +115,7 @@ export async function recordPayment(
       : null;
 
   const { error } = await supabase.from("payments").insert({
+    payment_context: "CUSTOMER",
     purchase_id: purchaseId,
     amount,
     currency: "ILS",

@@ -45,6 +45,7 @@ import {
 import {
   aggregateCampaignTotals,
   buildMonthlyMetrics,
+  computeCurrentPeriodBusinessSnapshot,
   type MetaDailyRow,
   type LeadTouchpointForAttribution,
   type MonthlyMetrics,
@@ -56,6 +57,8 @@ import {
   buildMonthlyReferralMetrics,
   aggregateExpensesByCategory,
 } from "@/lib/crm/business-report";
+import { BusinessTrendSection, type TrendMonthPoint } from "@/components/dashboard/business-trend-section";
+import { zonedParts, ISRAEL_TIME_ZONE } from "@/lib/crm/timezone";
 import type { RecurringExpenseRow } from "@/components/dashboard/recurring-expenses-manager";
 import type {
   LeadStage,
@@ -95,6 +98,8 @@ type RecentPayment = {
   amount: number;
   currency: string;
   paid_at: string;
+  notes: string | null;
+  payment_context: "CUSTOMER" | "GENERAL";
   purchase: {
     service_type: ServiceType;
     custom_service_name: string | null;
@@ -168,7 +173,7 @@ export default async function DashboardPage({
     supabase
       .from("payments")
       .select(
-        "id, amount, currency, paid_at, purchase:purchases(service_type, custom_service_name, customer:customers(id, contact:contacts(full_name)))"
+        "id, amount, currency, paid_at, notes, payment_context, purchase:purchases(service_type, custom_service_name, customer:customers(id, contact:contacts(full_name)))"
       )
       .eq("status", "PAID")
       .order("paid_at", { ascending: false })
@@ -358,6 +363,39 @@ export default async function DashboardPage({
     monthKeyOf,
     previousMonthKeyOf,
     formatMonthLabel,
+  });
+
+  // "מגמת העסק" — last 6 real calendar months (newest-first from
+  // monthlyMetrics above, reused as-is, no second calculation path) plus
+  // the current-partial-period-vs-same-range-last-month growth
+  // indicator. The real current month is guaranteed present even if it
+  // has zero data yet (buildMonthlyMetrics only emits a row where SOME
+  // data exists) so "current month, still in progress" always stays
+  // visible per the task's own requirement.
+  type TrendSourceMonth = {
+    monthKey: string;
+    isCurrentMonth: boolean;
+    revenueMinor: number;
+    totalExpensesMinor: number | null;
+  };
+  const trendCurrentKey = currentMonthKey();
+  const recentMonthsDesc: TrendSourceMonth[] = monthlyMetrics.slice(0, 6);
+  const trendSourceDesc: TrendSourceMonth[] = recentMonthsDesc.some((m) => m.monthKey === trendCurrentKey)
+    ? recentMonthsDesc
+    : [
+        { monthKey: trendCurrentKey, isCurrentMonth: true, revenueMinor: 0, totalExpensesMinor: null },
+        ...recentMonthsDesc,
+      ].slice(0, 6);
+  const trendMonths: TrendMonthPoint[] = [...trendSourceDesc].reverse(); // oldest -> newest, left to right
+
+  const todayIsraelDateKey = zonedParts(new Date(), ISRAEL_TIME_ZONE).dateKey;
+  const businessTrendSnapshot = computeCurrentPeriodBusinessSnapshot({
+    payments: allPaidPaymentsRes.data ?? [],
+    businessExpenses: allBusinessExpensesRes.data ?? [],
+    metaRows: allMetaRows,
+    todayDateKey: todayIsraelDateKey,
+    monthKeyOf,
+    previousMonthKeyOf,
   });
 
   // Campaign-level breakdown + synced-account count for the Marketing
@@ -738,6 +776,7 @@ export default async function DashboardPage({
           ) : (
             <ul className="divide-y divide-zinc-100">
               {recentPayments.map((payment) => {
+                const isGeneral = payment.payment_context === "GENERAL";
                 const serviceLabel =
                   payment.purchase?.custom_service_name ??
                   (payment.purchase
@@ -748,10 +787,10 @@ export default async function DashboardPage({
                   <>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-zinc-900">
-                        {customer?.contact?.full_name ?? "לקוחה לא ידועה"}
+                        {isGeneral ? payment.notes : (customer?.contact?.full_name ?? "לקוחה לא ידועה")}
                       </p>
                       <p className="truncate text-xs text-zinc-500">
-                        {serviceLabel} · {formatDate(payment.paid_at)}
+                        {isGeneral ? "תשלום כללי" : serviceLabel} · {formatDate(payment.paid_at)}
                       </p>
                     </div>
                     <span className="shrink-0 text-sm font-semibold text-zinc-900">
@@ -790,6 +829,10 @@ export default async function DashboardPage({
 
       <div className="mt-8">
         <FinancialSummary data={financialSummaryData} />
+      </div>
+
+      <div className="mt-8">
+        <BusinessTrendSection months={trendMonths} snapshot={businessTrendSnapshot} />
       </div>
 
       {/* Compact historical trend — real calendar months, all-time.

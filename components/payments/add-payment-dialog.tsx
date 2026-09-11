@@ -24,6 +24,13 @@ import type { PurchaseSummary } from "@/lib/crm/types";
 // now also verifies the submitted purchase genuinely belongs to the
 // submitted customer (lib/crm/payments.ts::validatePurchaseOwnership)
 // before ever inserting.
+//
+// Also supports a second payment type — "תשלום כללי" (GENERAL): real
+// PAID revenue not tied to any Customer/Purchase (a one-off workshop,
+// event income, ...). Toggling to it removes the customer/purchase
+// pickers entirely (not just hides them — avoids any `required`-
+// attribute conflict) and makes the notes field a required description,
+// same recordPayment action, branching server-side on payment_context.
 
 const initialState: RecordPaymentState = { error: null };
 
@@ -49,11 +56,14 @@ function purchaseLabel(p: PurchaseSummary): string {
   return p.status === "ACTIVE" ? service : `${service} (${PURCHASE_STATUS_LABELS[p.status] ?? p.status})`;
 }
 
+type PaymentType = "CUSTOMER" | "GENERAL";
+
 export function AddPaymentDialog({ customers }: { customers: CustomerPaymentOption[] }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const [state, formAction, isPending] = useActionState(recordPayment, initialState);
 
+  const [paymentType, setPaymentType] = useState<PaymentType>("CUSTOMER");
   const [customerId, setCustomerId] = useState(customers[0]?.id ?? "");
   const selectedCustomer = customers.find((c) => c.id === customerId) ?? null;
   const purchases = selectedCustomer?.purchases ?? [];
@@ -77,7 +87,9 @@ export function AddPaymentDialog({ customers }: { customers: CustomerPaymentOpti
     }
   }, [state.success]);
 
-  if (customers.length === 0) return null;
+  // Deliberately NOT `if (customers.length === 0) return null` anymore —
+  // a GENERAL payment needs no Customer to exist at all. CUSTOMER mode
+  // shows its own inline message when there are none (below).
 
   return (
     <>
@@ -108,53 +120,89 @@ export function AddPaymentDialog({ customers }: { customers: CustomerPaymentOpti
         </div>
 
         <form ref={formRef} action={formAction} className="px-5 py-4">
-          <input type="hidden" name="customer_id" value={customerId} />
+          <input type="hidden" name="payment_context" value={paymentType} />
+          {paymentType === "CUSTOMER" && <input type="hidden" name="customer_id" value={customerId} />}
 
           <div className="space-y-4">
-            <div className="space-y-1">
-              <label htmlFor="add_payment_customer" className={labelClass}>
-                לקוחה *
-              </label>
-              <select
-                id="add_payment_customer"
-                required
-                value={customerId}
-                onChange={(e) => handleCustomerChange(e.target.value)}
-                className={inputClass}
+            <div className="grid grid-cols-2 gap-2 rounded-lg bg-zinc-100 p-1 text-sm">
+              <button
+                type="button"
+                onClick={() => setPaymentType("CUSTOMER")}
+                className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
+                  paymentType === "CUSTOMER" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+                }`}
               >
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                תשלום של לקוחה
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentType("GENERAL")}
+                className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
+                  paymentType === "GENERAL" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+                }`}
+              >
+                תשלום כללי
+              </button>
             </div>
 
-            <div className="space-y-1">
-              <label htmlFor="purchase_id" className={labelClass}>
-                רכישה *
-              </label>
-              {purchases.length === 0 ? (
-                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                  ללקוחה זו אין רכישות קיימות לשיוך תשלום — יש להוסיף רכישה קודם.
-                </p>
-              ) : (
-                <select
-                  id="purchase_id"
-                  name="purchase_id"
-                  required
-                  value={purchaseId}
-                  onChange={(e) => setPurchaseId(e.target.value)}
-                  className={inputClass}
-                >
-                  {purchases.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {purchaseLabel(p)}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
+            {paymentType === "CUSTOMER" ? (
+              <>
+                <div className="space-y-1">
+                  <label htmlFor="add_payment_customer" className={labelClass}>
+                    לקוחה *
+                  </label>
+                  {customers.length === 0 ? (
+                    <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                      אין עדיין לקוחות במערכת.
+                    </p>
+                  ) : (
+                    <select
+                      id="add_payment_customer"
+                      required
+                      value={customerId}
+                      onChange={(e) => handleCustomerChange(e.target.value)}
+                      className={inputClass}
+                    >
+                      {customers.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <label htmlFor="purchase_id" className={labelClass}>
+                    רכישה *
+                  </label>
+                  {purchases.length === 0 ? (
+                    <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                      ללקוחה זו אין רכישות קיימות לשיוך תשלום — יש להוסיף רכישה קודם.
+                    </p>
+                  ) : (
+                    <select
+                      id="purchase_id"
+                      name="purchase_id"
+                      required
+                      value={purchaseId}
+                      onChange={(e) => setPurchaseId(e.target.value)}
+                      className={inputClass}
+                    >
+                      {purchases.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {purchaseLabel(p)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+                תשלום כללי אינו משויך ללקוחה או לרכישה ספציפית — יש לתאר אותו למטה.
+              </p>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
@@ -219,14 +267,19 @@ export function AddPaymentDialog({ customers }: { customers: CustomerPaymentOpti
 
             <div className="space-y-1">
               <label htmlFor="add_payment_notes" className={labelClass}>
-                הערות
+                {paymentType === "GENERAL" ? "תיאור *" : "הערות"}
               </label>
               <textarea
                 id="add_payment_notes"
                 name="notes"
                 rows={2}
+                required={paymentType === "GENERAL"}
                 className={inputClass}
-                placeholder="פרטים נוספים…"
+                placeholder={
+                  paymentType === "GENERAL"
+                    ? "לדוגמה: סדנה חד-פעמית, הכנסה מאירוע"
+                    : "פרטים נוספים…"
+                }
               />
             </div>
           </div>
@@ -247,7 +300,10 @@ export function AddPaymentDialog({ customers }: { customers: CustomerPaymentOpti
             </button>
             <button
               type="submit"
-              disabled={isPending || purchases.length === 0}
+              disabled={
+                isPending ||
+                (paymentType === "CUSTOMER" && (customers.length === 0 || purchases.length === 0))
+              }
               className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-60"
             >
               {isPending ? "שומרת…" : "שמירת תשלום"}

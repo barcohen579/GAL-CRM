@@ -168,6 +168,16 @@ export const PAYMENT_METHOD_LABELS: Record<string, string> = {
 
 export const PAYMENT_STATUSES = ["PAID", "REFUNDED", "FAILED"] as const;
 
+// Whether a payment is linked to a Customer/Purchase or is real general
+// business income with neither (see
+// supabase/migrations/20260911140000_..._general_payments.sql). Shown
+// as a small badge on every payment row so it's always visually clear
+// which kind a row is.
+export const PAYMENT_CONTEXT_LABELS: Record<string, string> = {
+  CUSTOMER: "לקוחה",
+  GENERAL: "כללי",
+};
+
 export const RECURRENCE_LABELS: Record<string, string> = {
   ONE_TIME: "תשלום חד פעמי",
   RECURRING_MONTHLY: "תשלום חודשי קבוע",

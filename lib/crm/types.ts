@@ -108,6 +108,11 @@ export type PaymentWithRelations = {
   // True only for a payment generate_due_recurring_payments() created
   // — drives the "אוטומטי" badge. Never set by any user-facing action.
   is_auto_generated: boolean;
+  // CUSTOMER: linked to a real purchase (`purchase` below is non-null).
+  // GENERAL: real PAID revenue not tied to any Customer/Purchase —
+  // `purchase` is null and `notes` carries the required description.
+  // See supabase/migrations/20260911140000_..._general_payments.sql.
+  payment_context: "CUSTOMER" | "GENERAL";
   purchase: {
     id: string;
     service_type: ServiceType;

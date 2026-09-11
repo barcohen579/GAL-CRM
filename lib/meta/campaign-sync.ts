@@ -22,9 +22,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 //      assumes a single shared timezone.
 //   2. Calls the real Meta Marketing API for campaign-level Insights,
 //      with time_increment=1 so each row is a single day, using a
-//      trailing-7-completed-days window computed in THAT account's own
-//      timezone (or an explicit range, applied identically to every
-//      configured account, for manual/backfill runs).
+//      trailing-7-day window (INCLUDING today, in THAT account's own
+//      timezone — see resolveDateRangeForAccount's own comment for why)
+//      or an explicit range, applied identically to every configured
+//      account, for manual/backfill runs.
+//   2b. Also fetches lightweight per-campaign metadata (objective,
+//       effective_status) via one extra /campaigns call per account —
+//       real Meta-returned identifying info, used only so
+//       "ביצועי קמפיינים" can show which promotion a row actually is
+//       (see mergeCampaignMetadata below). Never blocks the sync if it
+//       fails; that account's rows just get null objective/status.
 //   3. Converts each row's decimal ILS spend to integer agorot.
 //   4. Upserts one row per (ad account, campaign, day) into
 //      public.meta_campaign_daily_metrics, keyed on the table's unique
@@ -116,11 +123,26 @@ export function resolveDateRangeForAccount(argv: string[], accountTimezone: stri
     }
     return { since, until, mode: "explicit" };
   }
-  // Default: trailing 7 completed days ending yesterday, in this
-  // account's own Meta-reported timezone — never a hardcoded timezone,
-  // and never today (an "open" local day whose numbers are still moving).
+  // Default: trailing 7 days ENDING TODAY, in this account's own
+  // Meta-reported timezone — never a hardcoded timezone.
+  //
+  // Deliberately includes today (changed from an earlier "ending
+  // yesterday" design): a live Production investigation found a
+  // same-day campaign (created ~22:38 local time, started spending the
+  // next calendar day) whose entire spend history was "today" and would
+  // otherwise have stayed structurally invisible until the FOLLOWING
+  // day's sync, no matter how many times the Dashboard was opened —
+  // Meta's own date_preset=yesterday Insights call for that account
+  // returned zero rows, confirming there was genuinely nothing to show
+  // for "yesterday" while there WAS already real spend for "today".
+  // Today's number is necessarily partial/still-moving, which is
+  // exactly what "current Meta spend / today's latest available
+  // numbers" (the whole point of the Dashboard auto-refresh feature)
+  // asks for — and the trailing re-fetch of the last 6 already-complete
+  // days still absorbs Meta's own delayed/adjusted reporting for those,
+  // unchanged.
   const today = todayInTimezone(accountTimezone);
-  const until = addDays(today, -1);
+  const until = today;
   const since = addDays(until, -6); // 7 days inclusive: until-6 .. until
   return { since, until, mode: "default-trailing-7d" };
 }
@@ -238,6 +260,84 @@ async function fetchCampaignDailyInsights({
 }
 
 // ------------------------------------------------------------------
+// Campaign metadata (objective / effective_status) — real Meta-returned
+// identifying info, fetched once per account (NOT per day), used only
+// so "ביצועי קמפיינים" can show which promotion a row actually is (see
+// components/dashboard/marketing-performance.tsx). This is deliberately
+// a separate, lightweight /campaigns call rather than switching the
+// Insights call to level=adset/level=ad: Meta only returns
+// adset_name/ad_name at that finer grain, which would change the sync's
+// whole row shape (one row per adset/ad instead of per campaign) — a
+// materially bigger change than "identify the campaign better", so it's
+// not done here. objective/effective_status ARE plain properties of the
+// Campaign object itself, fetchable without changing the per-day grain.
+// ------------------------------------------------------------------
+
+export type CampaignMetadata = { objective: string | null; effectiveStatus: string | null };
+
+type CampaignMetaRow = { id: string; objective?: string | null; effective_status?: string | null };
+
+// Fetches every campaign's own objective/effective_status for one ad
+// account (any status — paused/archived campaigns can still have
+// historical spend rows worth labeling). Paginated the same way as
+// Insights, same 50-page safety cap.
+async function fetchCampaignsMetadata(
+  adAccountId: string,
+  token: string
+): Promise<Map<string, CampaignMetadata>> {
+  type CampaignsPage = { data?: CampaignMetaRow[]; paging?: { next?: string }; error?: MetaErrorShape };
+
+  const rows: CampaignMetaRow[] = [];
+  let json = await metaGet<CampaignsPage>(
+    `/${adAccountId}/campaigns`,
+    { fields: "id,objective,effective_status", limit: 200 },
+    token
+  );
+  rows.push(...(json.data ?? []));
+
+  let pageCount = 1;
+  while (json.paging?.next) {
+    const nextUrl = new URL(json.paging.next);
+    const res = await fetch(nextUrl, { headers: { Authorization: `Bearer ${token}` } });
+    json = (await res.json()) as CampaignsPage;
+    if (json.error) {
+      throw new Error(
+        `Meta API pagination error (campaigns metadata): ${json.error.type ?? ""} ${
+          json.error.code ?? ""
+        } — ${json.error.message ?? ""}`
+      );
+    }
+    rows.push(...(json.data ?? []));
+    pageCount += 1;
+    if (pageCount > 50) throw new Error("Meta API pagination exceeded 50 pages — aborting.");
+  }
+
+  const byId = new Map<string, CampaignMetadata>();
+  for (const r of rows) {
+    byId.set(String(r.id), {
+      objective: r.objective ?? null,
+      effectiveStatus: r.effective_status ?? null,
+    });
+  }
+  return byId;
+}
+
+// Merges campaign metadata into insight rows purely by campaign_id —
+// never fabricates a value for a campaign the metadata fetch didn't
+// return (e.g. it failed, or the campaign was deleted between the two
+// calls): those rows simply get null objective/effectiveStatus, exactly
+// like a campaign with no name already does today.
+export function mergeCampaignMetadata<T extends { campaign_id: string | number }>(
+  insightRows: T[],
+  metadataById: Map<string, CampaignMetadata>
+): (T & CampaignMetadata)[] {
+  return insightRows.map((r) => {
+    const meta = metadataById.get(String(r.campaign_id));
+    return { ...r, objective: meta?.objective ?? null, effectiveStatus: meta?.effectiveStatus ?? null };
+  });
+}
+
+// ------------------------------------------------------------------
 // Per-account pipeline
 // ------------------------------------------------------------------
 
@@ -297,7 +397,23 @@ async function syncOneAccount({
     JSON.stringify({ step: "meta_fetch_complete", accountId, rowsReceived: insightRows.length })
   );
 
-  const dbRows = insightRows.map((r) => ({
+  // Enrichment only — never lets a failure here fail the whole
+  // account's sync (the actual spend numbers are what matters most).
+  let campaignMetadata = new Map<string, CampaignMetadata>();
+  try {
+    campaignMetadata = await fetchCampaignsMetadata(accountId, token);
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        step: "campaign_metadata_fetch_failed",
+        accountId,
+        error: String((err as Error).message ?? err),
+      })
+    );
+  }
+  const enrichedRows = mergeCampaignMetadata(insightRows, campaignMetadata);
+
+  const dbRows = enrichedRows.map((r) => ({
     meta_ad_account_id: accountId,
     campaign_id: String(r.campaign_id),
     campaign_name: r.campaign_name ?? null,
@@ -306,6 +422,8 @@ async function syncOneAccount({
     impressions: Number(r.impressions ?? 0),
     reach: Number(r.reach ?? 0),
     clicks: Number(r.clicks ?? 0),
+    objective: r.objective,
+    effective_status: r.effectiveStatus,
   }));
 
   let upsertedCount = 0;

@@ -19,12 +19,21 @@ export type MetaDailyRow = {
   impressions: number;
   reach: number;
   clicks: number;
+  // Real Meta-returned campaign identification (see
+  // lib/meta/campaign-sync.ts::fetchCampaignsMetadata) — null/absent
+  // when the metadata fetch never covered this campaign_id (or this row
+  // predates the columns existing), never invented. Optional so older
+  // fixtures/tests that predate this field keep compiling unchanged.
+  objective?: string | null;
+  effective_status?: string | null;
 };
 
 export type CampaignPeriodTotals = {
   meta_ad_account_id: string;
   campaign_id: string;
   campaign_name: string | null;
+  objective: string | null;
+  effective_status: string | null;
   spend_minor: number;
   impressions: number;
   clicks: number;
@@ -62,11 +71,18 @@ export function aggregateCampaignTotals(rows: MetaDailyRow[]): CampaignPeriodTot
       existing.clicks += r.clicks;
       existing.approxReachSum += r.reach;
       if (r.campaign_name) existing.campaign_name = r.campaign_name;
+      // Same "latest non-null wins" rule as campaign_name — a campaign's
+      // objective/status can change day to day (e.g. paused later), and
+      // rows are not guaranteed to arrive in date order.
+      if (r.objective) existing.objective = r.objective;
+      if (r.effective_status) existing.effective_status = r.effective_status;
     } else {
       byKey.set(key, {
         meta_ad_account_id: r.meta_ad_account_id,
         campaign_id: r.campaign_id,
         campaign_name: r.campaign_name,
+        objective: r.objective ?? null,
+        effective_status: r.effective_status ?? null,
         spend_minor: r.spend_minor,
         impressions: r.impressions,
         clicks: r.clicks,

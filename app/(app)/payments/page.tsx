@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
+import { AddPaymentDialog, type CustomerPaymentOption } from "@/components/payments/add-payment-dialog";
 import {
   SERVICE_TYPE_LABELS,
   PAYMENT_STATUS_LABELS,
@@ -13,7 +14,7 @@ import {
   PAYMENT_METHOD_LABELS,
 } from "@/lib/crm/constants";
 import { formatDate, formatMoney, startOfMonthISO } from "@/lib/crm/format";
-import type { PaymentWithRelations } from "@/lib/crm/types";
+import type { PaymentWithRelations, PurchaseSummary } from "@/lib/crm/types";
 
 export const metadata: Metadata = { title: "תשלומים — GAL CRM" };
 export const dynamic = "force-dynamic";
@@ -21,15 +22,39 @@ export const dynamic = "force-dynamic";
 export default async function PaymentsPage() {
   const supabase = await createClient();
 
-  const { data, error } = await supabase
-    .from("payments")
-    .select(
-      `id, amount, currency, paid_at, method, status, is_auto_generated,
-       purchase:purchases(id, service_type, custom_service_name, customer:customers(id, contact:contacts(full_name)))`
-    )
-    .order("paid_at", { ascending: false });
+  const [{ data, error }, { data: customersData }] = await Promise.all([
+    supabase
+      .from("payments")
+      .select(
+        `id, amount, currency, paid_at, method, status, is_auto_generated,
+         purchase:purchases(id, service_type, custom_service_name, customer:customers(id, contact:contacts(full_name)))`
+      )
+      .order("paid_at", { ascending: false }),
+    // For the "+ הוספת תשלום" customer/purchase picker — every existing
+    // Purchase per Customer, so a manual payment can only ever attach to
+    // a Purchase that genuinely already exists (never auto-created).
+    supabase
+      .from("customers")
+      .select(
+        `id, contact:contacts(full_name),
+         purchases(id, service_type, custom_service_name, status, recurrence, agreed_price_amount, agreed_price_currency, next_billing_date)`
+      )
+      .order("customer_since", { ascending: false }),
+  ]);
 
   const payments = (data ?? []) as unknown as PaymentWithRelations[];
+
+  const customerPaymentOptions: CustomerPaymentOption[] = (
+    (customersData ?? []) as unknown as {
+      id: string;
+      contact: { full_name: string } | null;
+      purchases: PurchaseSummary[];
+    }[]
+  ).map((c) => ({
+    id: c.id,
+    name: c.contact?.full_name ?? "לקוחה לא ידועה",
+    purchases: c.purchases,
+  }));
 
   const totalPaid = payments
     .filter((p) => p.status === "PAID")
@@ -48,6 +73,7 @@ export default async function PaymentsPage() {
       <PageHeader
         title="תשלומים"
         description="יומן ההכנסות — כל תשלום שנרשם אי פעם, מהחדש לישן."
+        action={<AddPaymentDialog customers={customerPaymentOptions} />}
       />
 
       {error && (

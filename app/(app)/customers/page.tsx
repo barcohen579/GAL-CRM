@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { UserRound, Phone, Mail, AtSign, Clock } from "lucide-react";
+import { UserRound, Phone, Mail, AtSign, Clock, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
+import { StatCard } from "@/components/ui/stat-card";
 import { AddCustomerDialog } from "@/components/customers/add-customer-dialog";
 import {
   SERVICE_TYPE_LABELS,
@@ -13,6 +14,7 @@ import {
   CUSTOMER_STATUS_LABELS,
 } from "@/lib/crm/constants";
 import { formatDate, formatMoney, formatRelative } from "@/lib/crm/format";
+import { countCustomers } from "@/lib/crm/customers";
 import type { CustomerWithRelations } from "@/lib/crm/types";
 
 export const metadata: Metadata = { title: "לקוחות — GAL CRM" };
@@ -41,6 +43,11 @@ export default async function CustomersPage() {
   const customersForReferrer = customers
     .filter((c) => c.contact)
     .map((c) => ({ id: c.id, full_name: c.contact!.full_name, phone: c.contact!.phone }));
+  // "סה״כ לקוחות" — real rows from `customers`, nothing inferred from
+  // Leads/Purchases/Payments. The query above has no filter/limit, so
+  // this already-loaded array's length IS the exact total (see
+  // lib/crm/customers.ts::countCustomers).
+  const totalCustomers = countCustomers(customers);
 
   return (
     <div>
@@ -55,6 +62,10 @@ export default async function CustomersPage() {
           שגיאה בטעינת הלקוחות: {error.message}
         </p>
       )}
+
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:max-w-xs">
+        <StatCard label="סה״כ לקוחות" value={String(totalCustomers)} icon={Users} tone="accent" />
+      </div>
 
       {customers.length === 0 ? (
         <EmptyState

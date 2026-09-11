@@ -158,6 +158,46 @@ test("buildMonthlyMetrics: Meta spend is never counted as a business expense, an
   assert.equal(row.otherExpensesMinor, 30000, "business expenses must stay exactly what was entered, no Meta mixed in");
 });
 
+// Critical financial rule (explicitly re-confirmed, not just inherited):
+// total Meta advertising expense must include ALL legitimate paid spend
+// from the configured accounts -- lead campaigns, engagement campaigns,
+// boosted posts, anything Meta reports spend for -- never limited to
+// campaigns that happen to have a lead/touchpoint attached. Lead
+// attribution (classifyLeadAttribution / confirmedMetaRevenueMinor) is
+// a completely separate concern from this sum.
+test("buildMonthlyMetrics: an engagement/boosted-post campaign with ZERO lead attribution still fully counts toward metaSpendMinor", () => {
+  const key = monthsAgoKey(1);
+  const [y, m] = key.split("-");
+  const dateInMonth = `${y}-${m}-10`;
+  const result = buildMonthlyMetrics({
+    ...baseArgs,
+    metaRows: [
+      {
+        meta_ad_account_id: "act_2070492616442158",
+        campaign_id: "120247020269420068",
+        campaign_name: "קמפיין מעורבות חדש",
+        objective: "OUTCOME_ENGAGEMENT",
+        effective_status: "ACTIVE",
+        metric_date: dateInMonth,
+        spend_minor: 1448,
+        impressions: 586,
+        reach: 542,
+        clicks: 40,
+      },
+    ],
+    // No leads/touchpoints/confirmed-Meta purchases reference this
+    // campaign at all -- an engagement/boosted-post campaign typically
+    // never generates a Lead the way a OUTCOME_LEADS campaign does.
+    leads: [],
+    wonEvents: [],
+    payments: [],
+    confirmedMetaPurchaseIds: [],
+    businessExpenses: [],
+  });
+  const row = result.find((r) => r.monthKey === key)!;
+  assert.equal(row.metaSpendMinor, 1448, "an engagement campaign's spend must count toward the financial total even with zero lead attribution");
+});
+
 test("buildMonthlyMetrics: totalExpenses/estimatedProfit are null (unknown), never a misleading 0/full-revenue, when Meta was never synced that month", () => {
   const key = monthsAgoKey(1);
   const [y, m] = key.split("-");

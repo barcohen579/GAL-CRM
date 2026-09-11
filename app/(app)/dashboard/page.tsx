@@ -191,7 +191,9 @@ export default async function DashboardPage({
     // range-scoped queries. ----
     supabase
       .from("meta_campaign_daily_metrics")
-      .select("meta_ad_account_id, campaign_id, campaign_name, metric_date, spend_minor, impressions, reach, clicks"),
+      .select(
+        "meta_ad_account_id, campaign_id, campaign_name, objective, effective_status, metric_date, spend_minor, impressions, reach, clicks"
+      ),
     supabase.from("leads").select("id, created_at, touchpoints(channel, certainty)"),
     supabase.from("lead_stage_events").select("lead_id, changed_at").eq("to_stage", "WON"),
     supabase.from("payments").select("amount, paid_at, purchase_id").eq("status", "PAID"),

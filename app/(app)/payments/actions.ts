@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { firstOfMonth } from "@/lib/crm/recurring";
+import { parseManualPaymentInput, validatePurchaseOwnership } from "@/lib/crm/payments";
 
 function optionalString(value: FormDataEntryValue | null): string | null {
   const s = typeof value === "string" ? value.trim() : "";
@@ -29,26 +30,17 @@ export async function recordPayment(
   _prevState: RecordPaymentState,
   formData: FormData
 ): Promise<RecordPaymentState> {
-  const purchaseId = optionalString(formData.get("purchase_id"));
-  const customerId = optionalString(formData.get("customer_id"));
-  const amountRaw = optionalString(formData.get("amount"));
-  const paidAt = optionalString(formData.get("paid_at"));
-  const method = optionalString(formData.get("method"));
-  const status = optionalString(formData.get("status")) ?? "PAID";
-  const notes = optionalString(formData.get("notes"));
-
-  if (!purchaseId) return { error: "יש לבחור רכישה." };
-  if (!amountRaw) return { error: "יש להזין סכום." };
-
-  const amountNis = Number(amountRaw.replace(/,/g, ""));
-  if (!Number.isFinite(amountNis) || amountNis < 0) {
-    return { error: "הסכום שהוזן אינו תקין." };
-  }
-  // ₪ -> integer agorot. Never store money as a float.
-  const amount = Math.round(amountNis * 100);
-
-  if (!paidAt) return { error: "יש לבחור תאריך תשלום." };
-  if (!method) return { error: "יש לבחור אמצעי תשלום." };
+  const parsed = parseManualPaymentInput({
+    purchaseId: optionalString(formData.get("purchase_id")),
+    customerId: optionalString(formData.get("customer_id")),
+    amountRaw: optionalString(formData.get("amount")),
+    paidAt: optionalString(formData.get("paid_at")),
+    method: optionalString(formData.get("method")),
+    status: optionalString(formData.get("status")),
+    notes: optionalString(formData.get("notes")),
+  });
+  if ("error" in parsed) return { error: parsed.error };
+  const { purchaseId, customerId, amountMinor: amount, paidAt, method, status, notes } = parsed;
 
   const supabase = await createClient();
 
@@ -58,11 +50,21 @@ export async function recordPayment(
   // double-bill this same month later (see
   // payments_purchase_billing_cycle_key). Not applied to a ONE_TIME or
   // stopped purchase, where the concept doesn't apply.
+  //
+  // Also carries customer_id, so a payment can never be attached to a
+  // Purchase that doesn't actually belong to the Customer the form was
+  // submitted for (see validatePurchaseOwnership) — this is the one
+  // thing the UI's own purchase picker can't guarantee on its own, since
+  // a submission is just a purchase_id string by the time it gets here.
   const { data: purchase } = await supabase
     .from("purchases")
-    .select("recurrence, status")
+    .select("recurrence, status, customer_id")
     .eq("id", purchaseId)
     .maybeSingle();
+
+  const ownership = validatePurchaseOwnership(purchase, customerId);
+  if (!ownership.ok) return { error: ownership.error };
+
   const billingCycle =
     purchase?.recurrence === "RECURRING_MONTHLY" && purchase.status === "ACTIVE"
       ? firstOfMonth(paidAt)

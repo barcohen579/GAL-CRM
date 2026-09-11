@@ -11,6 +11,7 @@ import {
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatMoney } from "@/lib/crm/format";
+import { OBJECTIVE_LABELS } from "@/lib/crm/constants";
 import { KpiCard, formatRatio } from "./business-report";
 import type { CampaignPeriodTotals } from "@/lib/crm/marketing";
 
@@ -178,7 +179,7 @@ export function MarketingPerformance({
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-sm">
+            <table className="w-full min-w-[820px] text-sm">
               <thead>
                 <tr className="border-b border-zinc-100 text-xs text-zinc-500">
                   <th className="px-5 py-2.5 text-start font-medium">קמפיין</th>
@@ -195,29 +196,44 @@ export function MarketingPerformance({
               <tbody className="divide-y divide-zinc-100">
                 {campaigns.map((c) => (
                   <tr key={`${c.meta_ad_account_id}-${c.campaign_id}`}>
-                    <td className="max-w-[220px] truncate px-5 py-3 font-medium text-zinc-900">
-                      {c.campaign_name ?? c.campaign_id}
+                    <td className="min-w-[240px] max-w-[380px] px-5 py-3 align-top font-medium text-zinc-900">
+                      {/* Full name, wrapped up to 3 lines — never a
+                          single-line ellipsis (see the task: Bar/Gal
+                          must be able to tell "איזה פרסום זה?" without
+                          guessing). title= gives the exact full text on
+                          hover too. */}
+                      <p
+                        className="line-clamp-3 whitespace-normal break-words"
+                        title={c.campaign_name ?? c.campaign_id}
+                      >
+                        {c.campaign_name ?? c.campaign_id}
+                      </p>
+                      {c.objective && (
+                        <p className="mt-0.5 text-xs font-normal text-zinc-500">
+                          {OBJECTIVE_LABELS[c.objective] ?? c.objective}
+                        </p>
+                      )}
                     </td>
-                    <td className="px-5 py-3 text-xs text-zinc-500" dir="ltr">
+                    <td className="px-5 py-3 align-top text-xs text-zinc-500" dir="ltr">
                       {c.meta_ad_account_id}
                     </td>
-                    <td className="px-5 py-3 text-end">{formatMoney(c.spend_minor)}</td>
-                    <td className="px-5 py-3 text-end">
+                    <td className="px-5 py-3 text-end align-top">{formatMoney(c.spend_minor)}</td>
+                    <td className="px-5 py-3 text-end align-top">
                       {c.impressions.toLocaleString("he-IL")}
                     </td>
-                    <td className="px-5 py-3 text-end text-zinc-500">
+                    <td className="px-5 py-3 text-end align-top text-zinc-500">
                       ≈{c.approxReachSum.toLocaleString("he-IL")}
                     </td>
-                    <td className="px-5 py-3 text-end">
+                    <td className="px-5 py-3 text-end align-top">
                       {c.clicks.toLocaleString("he-IL")}
                     </td>
-                    <td className="px-5 py-3 text-end">
+                    <td className="px-5 py-3 text-end align-top">
                       {c.cpcMinor === null ? "—" : formatMoney(c.cpcMinor)}
                     </td>
-                    <td className="px-5 py-3 text-end">
+                    <td className="px-5 py-3 text-end align-top">
                       {c.cpmMinor === null ? "—" : formatMoney(c.cpmMinor)}
                     </td>
-                    <td className="px-5 py-3 text-end">
+                    <td className="px-5 py-3 text-end align-top">
                       {c.ctrPercent === null ? "—" : `${c.ctrPercent.toFixed(2)}%`}
                     </td>
                   </tr>

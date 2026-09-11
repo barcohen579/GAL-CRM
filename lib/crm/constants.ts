@@ -185,6 +185,30 @@ export const PURCHASE_STATUS_LABELS: Record<string, string> = {
   CANCELLED: "בוטל",
 };
 
+// Hebrew labels for a Meta campaign's real `objective` field (see
+// lib/meta/campaign-sync.ts::fetchCampaignsMetadata) — shown as the
+// secondary identifying line under a campaign's name in "ביצועי
+// קמפיינים" so Bar/Gal can tell "איזה פרסום זה?" at a glance. Covers
+// every objective observed live across both configured ad accounts,
+// plus Meta's other current campaign objectives for completeness. An
+// objective not listed here (Meta adds new ones over time) falls back
+// to the raw value as-is — never blank, never invented.
+export const OBJECTIVE_LABELS: Record<string, string> = {
+  OUTCOME_ENGAGEMENT: "מעורבות",
+  POST_ENGAGEMENT: "מעורבות בפוסט",
+  OUTCOME_LEADS: "לידים",
+  OUTCOME_TRAFFIC: "תנועה לאתר",
+  LINK_CLICKS: "קליקים לקישור",
+  OUTCOME_AWARENESS: "מודעות למותג",
+  OUTCOME_SALES: "מכירות",
+  OUTCOME_APP_PROMOTION: "קידום אפליקציה",
+  MESSAGES: "הודעות",
+  VIDEO_VIEWS: "צפיות בסרטון",
+  CONVERSIONS: "המרות",
+  REACH: "הגעה",
+  BRAND_AWARENESS: "מודעות למותג",
+};
+
 export const CUSTOMER_STATUS_LABELS: Record<string, string> = {
   ACTIVE: "פעילה",
   INACTIVE: "לא פעילה",

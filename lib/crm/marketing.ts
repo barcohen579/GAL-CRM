@@ -50,6 +50,14 @@ export type CampaignPeriodTotals = {
   cpcMinor: number | null; // spend_minor / clicks
   cpmMinor: number | null; // spend_minor / impressions * 1000
   ctrPercent: number | null; // clicks / impressions * 100
+  /** This campaign's own earliest/latest metric_date among the rows
+   *  aggregated in — i.e. its real active window WITHIN whatever period
+   *  was passed in (not the whole period's bounds). Used to look up an
+   *  account-wide (never campaign-attributed) Instagram follower change
+   *  "during the promotion's period" — see
+   *  lib/meta/instagram-follower-sync.ts::computeAccountFollowerChange. */
+  earliestDate: string;
+  latestDate: string;
 };
 
 /** Division that returns null instead of Infinity/NaN — callers render
@@ -76,6 +84,8 @@ export function aggregateCampaignTotals(rows: MetaDailyRow[]): CampaignPeriodTot
       // rows are not guaranteed to arrive in date order.
       if (r.objective) existing.objective = r.objective;
       if (r.effective_status) existing.effective_status = r.effective_status;
+      if (r.metric_date < existing.earliestDate) existing.earliestDate = r.metric_date;
+      if (r.metric_date > existing.latestDate) existing.latestDate = r.metric_date;
     } else {
       byKey.set(key, {
         meta_ad_account_id: r.meta_ad_account_id,
@@ -90,6 +100,8 @@ export function aggregateCampaignTotals(rows: MetaDailyRow[]): CampaignPeriodTot
         cpcMinor: null,
         cpmMinor: null,
         ctrPercent: null,
+        earliestDate: r.metric_date,
+        latestDate: r.metric_date,
       });
     }
   }

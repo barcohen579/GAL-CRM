@@ -43,6 +43,18 @@ export function getMetaWebhookVerifyToken(): string {
   return token;
 }
 
+// Instagram Business Account id for the daily follower-snapshot sync
+// (lib/meta/instagram-follower-sync.ts) — NOT a secret (an id, exactly
+// like META_AD_ACCOUNT_IDS), just not configured yet. Deliberately
+// returns null instead of throwing when unset: unlike the fail-closed
+// accessors in this file, this feature is optional/future-facing — the
+// sync simply skips the follower snapshot (campaign spend still syncs
+// normally) until this is added.
+export function getInstagramBusinessAccountId(): string | null {
+  const id = process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID;
+  return id && id.trim().length > 0 ? id.trim() : null;
+}
+
 // Shared secret authenticating POSTs from the Zapier "Webhooks by
 // Zapier" action (Facebook Lead Ads trigger -> POST to
 // /api/zapier/facebook-leads) — see lib/meta/zapier-auth.ts. Unrelated

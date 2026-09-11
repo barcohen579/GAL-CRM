@@ -142,6 +142,7 @@ export default async function DashboardPage({
     allCustomersContactMapRes,
     recurringExpensesRes,
     metaSyncStateRes,
+    instagramFollowerSnapshotsRes,
   ] = await Promise.all([
     // Fetches every PENDING follow-up (not just "due now" or a limited
     // page) with the (source, lead id) each row needs, so the
@@ -263,6 +264,10 @@ export default async function DashboardPage({
     // the after() call further down). A single row, RLS SELECT-only for
     // authenticated (see that table's own migration).
     supabase.from("meta_sync_state").select("status, last_success_at").eq("source", "META").maybeSingle(),
+    // Instagram account-wide follower snapshots (never campaign-
+    // attributed — see lib/meta/instagram-follower-sync.ts's own header
+    // for why). Small table, one row/day, all-time is cheap.
+    supabase.from("instagram_account_daily_metrics").select("metric_date, follower_count"),
   ]);
 
   // Automatic Fresh Meta Sync on Dashboard Entry — renders with whatever
@@ -823,6 +828,7 @@ export default async function DashboardPage({
       <div id="marketing" className="mt-8">
         <MarketingPerformance
           data={marketingData}
+          followerSnapshots={instagramFollowerSnapshotsRes.data ?? []}
           freshnessIndicator={<MetaFreshnessIndicator initialFreshness={metaSyncFreshness} />}
         />
       </div>

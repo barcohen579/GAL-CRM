@@ -27,10 +27,12 @@ import { createAdminClient } from "../../../../lib/supabase/admin.ts";
 import { createClient } from "../../../../lib/supabase/server.ts";
 import { getCronSecret } from "../../../../lib/cron/env.ts";
 import { verifyCronAuthHeader } from "../../../../lib/cron/auth.ts";
-import { getMetaAccessToken } from "../../../../lib/meta/env.ts";
+import { getMetaAccessToken, getInstagramBusinessAccountId } from "../../../../lib/meta/env.ts";
 import { resolveConfiguredAccountIds, runMetaCampaignSync } from "../../../../lib/meta/campaign-sync.ts";
+import { syncInstagramFollowerSnapshot } from "../../../../lib/meta/instagram-follower-sync.ts";
 import { createSupabaseMetaSyncStateRepo } from "../../../../lib/meta/sync-state-repo.ts";
 import { triggerMetaSyncIfNeeded } from "../../../../lib/meta/sync-orchestrator.ts";
+import { zonedParts, ISRAEL_TIME_ZONE } from "../../../../lib/crm/timezone.ts";
 
 export const runtime = "nodejs";
 // Headroom for two accounts' worth of Meta Insights calls + upserts —
@@ -109,6 +111,27 @@ export async function POST(request: Request): Promise<Response> {
         `Meta sync partially failed for ${failedAccounts.length}/${result.accounts.length} account(s)`
       );
     }
+
+    // Instagram follower snapshot — best-effort enrichment, never lets a
+    // failure here turn a successful campaign-spend sync into a
+    // reported failure (same "enrichment, never blocking" reasoning as
+    // the campaign objective/status metadata fetch). No-ops entirely
+    // when INSTAGRAM_BUSINESS_ACCOUNT_ID isn't configured yet.
+    const igUserId = getInstagramBusinessAccountId();
+    if (igUserId) {
+      try {
+        const todayDateKey = zonedParts(new Date(), ISRAEL_TIME_ZONE).dateKey;
+        await syncInstagramFollowerSnapshot({ supabase: admin, metaToken, igUserId, todayDateKey });
+      } catch (err) {
+        console.error(
+          JSON.stringify({
+            step: "instagram_follower_snapshot_failed",
+            error: String((err as Error).message ?? err),
+          })
+        );
+      }
+    }
+
     return result;
   };
 

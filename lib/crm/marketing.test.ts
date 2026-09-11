@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyLeadAttribution, buildMonthlyMetrics, computeCurrentPeriodBusinessSnapshot } from "./marketing.ts";
+import {
+  classifyLeadAttribution,
+  buildMonthlyMetrics,
+  computeCurrentPeriodBusinessSnapshot,
+  aggregateCampaignTotals,
+} from "./marketing.ts";
 import { monthKeyOf, previousMonthKeyOf, formatMonthLabel } from "./date-range.ts";
 
 // Referral-relevant coverage for classifyLeadAttribution. This module had
@@ -383,4 +388,67 @@ test("computeCurrentPeriodBusinessSnapshot: expenses = Meta spend + business exp
   assert.equal(result.expenses.previousMinor, 4000, "previous expenses = business (3000) + Meta (1000)");
   assert.equal(result.profit.currentMinor, 43000, "current profit = revenue (50000) - expenses (7000)");
   assert.equal(result.profit.previousMinor, 36000, "previous profit = revenue (40000) - expenses (4000)");
+});
+
+// ------------------------------------------------------------------
+// aggregateCampaignTotals — earliestDate/latestDate (new: lets the UI
+// look up an account-wide, non-attributed Instagram follower change
+// "during the promotion's own window", not a fixed month-wide range).
+// Existing CPC/CPM/CTR/spend aggregation behavior is untouched by this
+// addition -- no existing test needed updating.
+// ------------------------------------------------------------------
+
+test("aggregateCampaignTotals: earliestDate/latestDate track a campaign's own real active window across its rows, regardless of row order", () => {
+  const totals = aggregateCampaignTotals([
+    {
+      meta_ad_account_id: "act_1",
+      campaign_id: "c1",
+      campaign_name: "Campaign 1",
+      metric_date: "2026-09-05",
+      spend_minor: 500,
+      impressions: 10,
+      reach: 8,
+      clicks: 1,
+    },
+    {
+      meta_ad_account_id: "act_1",
+      campaign_id: "c1",
+      campaign_name: "Campaign 1",
+      metric_date: "2026-09-03",
+      spend_minor: 500,
+      impressions: 10,
+      reach: 8,
+      clicks: 1,
+    },
+    {
+      meta_ad_account_id: "act_1",
+      campaign_id: "c1",
+      campaign_name: "Campaign 1",
+      metric_date: "2026-09-07",
+      spend_minor: 500,
+      impressions: 10,
+      reach: 8,
+      clicks: 1,
+    },
+  ]);
+  assert.equal(totals.length, 1);
+  assert.equal(totals[0].earliestDate, "2026-09-03");
+  assert.equal(totals[0].latestDate, "2026-09-07");
+});
+
+test("aggregateCampaignTotals: a single-day campaign has earliestDate === latestDate", () => {
+  const totals = aggregateCampaignTotals([
+    {
+      meta_ad_account_id: "act_1",
+      campaign_id: "c1",
+      campaign_name: "Campaign 1",
+      metric_date: "2026-09-11",
+      spend_minor: 1448,
+      impressions: 586,
+      reach: 542,
+      clicks: 40,
+    },
+  ]);
+  assert.equal(totals[0].earliestDate, "2026-09-11");
+  assert.equal(totals[0].latestDate, "2026-09-11");
 });

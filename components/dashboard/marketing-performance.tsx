@@ -14,6 +14,18 @@ import { formatMoney } from "@/lib/crm/format";
 import { OBJECTIVE_LABELS } from "@/lib/crm/constants";
 import { KpiCard, formatRatio } from "./business-report";
 import type { CampaignPeriodTotals } from "@/lib/crm/marketing";
+import {
+  computeAccountFollowerChange,
+  type FollowerSnapshotRow,
+} from "@/lib/meta/instagram-follower-sync";
+
+// Account-wide (never per-campaign-attributed) Instagram follower change
+// "during the promotion's period" — see lib/meta/instagram-follower-sync.ts
+// for the full reasoning: a live Meta API audit confirmed there is no
+// genuine paid-attributed follow metric for this account/token at any
+// reporting level, so this is deliberately labeled as account-wide
+// context, never as this campaign's own result.
+const FOLLOWER_CHANGE_TOOLTIP = "שינוי בחשבון בתקופת הפרסום — לא ייחוס ודאי לקמפיין";
 
 // "שיווק — [חודש נבחר]" — the dashboard's ONE marketing section. Every
 // figure here is scoped to the SAME selected month driving the rest of
@@ -45,9 +57,15 @@ export type MarketingPerformanceData = {
 
 export function MarketingPerformance({
   data,
+  followerSnapshots = [],
   freshnessIndicator,
 }: {
   data: MarketingPerformanceData;
+  /** All-time Instagram account daily follower snapshots (small table,
+   *  one row/day) — used only to compute the honest, non-attributed
+   *  "שינוי עוקבים בתקופת הפרסום" column below; empty until the sync
+   *  has collected at least two days. */
+  followerSnapshots?: FollowerSnapshotRow[];
   /** The Meta sync freshness pill + "רענון עכשיו" button — rendered here
    *  (not owned by this component) so this stays a pure presentational
    *  component; see app/(app)/dashboard/page.tsx and
@@ -179,7 +197,7 @@ export function MarketingPerformance({
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-sm">
+            <table className="w-full min-w-[980px] text-sm">
               <thead>
                 <tr className="border-b border-zinc-100 text-xs text-zinc-500">
                   <th className="px-5 py-2.5 text-start font-medium">קמפיין</th>
@@ -191,6 +209,12 @@ export function MarketingPerformance({
                   <th className="px-5 py-2.5 text-end font-medium">CPC</th>
                   <th className="px-5 py-2.5 text-end font-medium">CPM</th>
                   <th className="px-5 py-2.5 text-end font-medium">CTR</th>
+                  <th
+                    className="px-5 py-2.5 text-end font-medium"
+                    title={FOLLOWER_CHANGE_TOOLTIP}
+                  >
+                    שינוי עוקבים בתקופת הפרסום
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
@@ -236,6 +260,23 @@ export function MarketingPerformance({
                     <td className="px-5 py-3 text-end align-top">
                       {c.ctrPercent === null ? "—" : `${c.ctrPercent.toFixed(2)}%`}
                     </td>
+                    {(() => {
+                      const followerChange = computeAccountFollowerChange(
+                        followerSnapshots,
+                        c.earliestDate,
+                        c.latestDate
+                      );
+                      return (
+                        <td
+                          className="px-5 py-3 text-end align-top text-zinc-500"
+                          title={FOLLOWER_CHANGE_TOOLTIP}
+                        >
+                          {followerChange === null
+                            ? "—"
+                            : `${followerChange.changeCount > 0 ? "+" : ""}${followerChange.changeCount}`}
+                        </td>
+                      );
+                    })()}
                   </tr>
                 ))}
               </tbody>

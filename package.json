@@ -22,7 +22,8 @@
     "db:test:follow-up-notifications": "supabase db query --linked -f supabase/tests/follow_up_notifications.test.sql",
     "db:test:automatic-followup-escalation": "supabase db query --linked -f supabase/tests/automatic_lead_followup_escalation.test.sql",
     "db:test:one-current-manual-follow-up": "supabase db query --linked -f supabase/tests/one_current_manual_follow_up_per_lead.test.sql",
-    "db:test:automatic-followup-10am": "supabase db query --linked -f supabase/tests/automatic_followup_10am.test.sql"
+    "db:test:automatic-followup-10am": "supabase db query --linked -f supabase/tests/automatic_followup_10am.test.sql",
+    "db:test:meta-sync-state": "supabase db query --linked -f supabase/tests/meta_sync_state.test.sql"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

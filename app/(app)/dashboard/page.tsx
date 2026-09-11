@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { after } from "next/server";
+import { headers } from "next/headers";
 import {
   UserPlus,
   Clock,
@@ -23,6 +25,9 @@ import {
 import { MonthlyPerformance } from "@/components/dashboard/monthly-performance";
 import { FinancialSummary, type FinancialSummaryData } from "@/components/dashboard/business-report";
 import { MonthSelector } from "@/components/dashboard/month-selector";
+import { MetaFreshnessIndicator } from "@/components/dashboard/meta-freshness-indicator";
+import { computeSyncFreshness } from "@/lib/meta/sync-freshness";
+import { getCronSecret } from "@/lib/cron/env";
 import {
   LEAD_STAGE_LABELS,
   LEAD_STAGE_TONE,
@@ -61,6 +66,12 @@ import type {
 
 export const metadata: Metadata = { title: "לוח בקרה — GAL CRM" };
 export const dynamic = "force-dynamic";
+// Headroom for the background Meta sync this page may kick off via
+// after() below (app/api/meta/sync-trigger/route.ts, maxDuration=60 of
+// its own) — the trigger fetch itself doesn't block this page's
+// response, but Vercel's waitUntil still counts it against this route's
+// own duration budget.
+export const maxDuration = 30;
 
 type RecentLead = {
   id: string;
@@ -125,6 +136,7 @@ export default async function DashboardPage({
     allReferralsRes,
     allCustomersContactMapRes,
     recurringExpensesRes,
+    metaSyncStateRes,
   ] = await Promise.all([
     // Fetches every PENDING follow-up (not just "due now" or a limited
     // page) with the (source, lead id) each row needs, so the
@@ -238,7 +250,67 @@ export default async function DashboardPage({
       .select("id, description, category, amount_minor, status")
       .order("status", { ascending: true })
       .order("created_at", { ascending: false }),
+    // Meta sync freshness/lock state (lib/meta/sync-state-repo.ts) —
+    // drives the "נתוני Meta עודכנו לפני X דקות" indicator below and
+    // whether this request should kick off a background refresh (see
+    // the after() call further down). A single row, RLS SELECT-only for
+    // authenticated (see that table's own migration).
+    supabase.from("meta_sync_state").select("status, last_success_at").eq("source", "META").maybeSingle(),
   ]);
+
+  // Automatic Fresh Meta Sync on Dashboard Entry — renders with whatever
+  // is already cached (below), then, if the last successful Meta sync is
+  // 10+ minutes old, missing, or never succeeded, kicks off a background
+  // sync via app/api/meta/sync-trigger — the SAME production sync path
+  // as scripts/meta-sync.mjs and the manual "רענון עכשיו" button, behind
+  // the same server-side concurrency lock (lib/meta/sync-orchestrator.ts).
+  // Never blocks this response: after() schedules the trigger fetch to
+  // run once the Dashboard's own HTML has already been sent.
+  const metaSyncFreshness = computeSyncFreshness(
+    metaSyncStateRes.data
+      ? { status: metaSyncStateRes.data.status, lastSuccessAt: metaSyncStateRes.data.last_success_at }
+      : null,
+    new Date(nowIso)
+  );
+
+  if (metaSyncFreshness.isStale) {
+    // Request-time APIs (headers()) must be read here, during render —
+    // never inside the after() callback itself, which runs after React's
+    // rendering lifecycle (see next/server's after() docs).
+    const requestHeaders = await headers();
+    const host = requestHeaders.get("host");
+    const proto = requestHeaders.get("x-forwarded-proto") ?? "https";
+    let cronSecret: string | null;
+    try {
+      cronSecret = getCronSecret();
+    } catch {
+      cronSecret = null; // not configured (e.g. local dev) -- skip silently.
+    }
+
+    if (host && cronSecret) {
+      const triggerUrl = `${proto}://${host}/api/meta/sync-trigger`;
+      const secret = cronSecret;
+      after(async () => {
+        try {
+          await fetch(triggerUrl, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ force: false }),
+          });
+        } catch (err) {
+          // A Meta outage (or any failure here) must never affect the
+          // Dashboard, which has already been sent to the browser by
+          // the time this runs -- only server-side logging.
+          console.error(
+            JSON.stringify({
+              step: "dashboard_meta_sync_trigger_failed",
+              error: String((err as Error).message ?? err),
+            })
+          );
+        }
+      });
+    }
+  }
 
   // Confirmed-Meta-attributed revenue traces CONFIRMED META_AD leads ->
   // their purchases (purchases.lead_id, set once at WON conversion) ->
@@ -708,7 +780,10 @@ export default async function DashboardPage({
       </div>
 
       <div id="marketing" className="mt-8">
-        <MarketingPerformance data={marketingData} />
+        <MarketingPerformance
+          data={marketingData}
+          freshnessIndicator={<MetaFreshnessIndicator initialFreshness={metaSyncFreshness} />}
+        />
       </div>
 
       <div className="mt-8">

@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
-import { getSupabaseEnv } from "./env";
+import { cookies } from "next/headers.js";
+import { getSupabaseEnv } from "./env.ts";
 
 // Supabase client for use in Server Components, Server Actions, and Route
 // Handlers. Uses the public anon key together with the current request's

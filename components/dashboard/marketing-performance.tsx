@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   Wallet,
   UserPlus,
@@ -41,7 +42,17 @@ export type MarketingPerformanceData = {
   campaigns: CampaignPeriodTotals[];
 };
 
-export function MarketingPerformance({ data }: { data: MarketingPerformanceData }) {
+export function MarketingPerformance({
+  data,
+  freshnessIndicator,
+}: {
+  data: MarketingPerformanceData;
+  /** The Meta sync freshness pill + "רענון עכשיו" button — rendered here
+   *  (not owned by this component) so this stays a pure presentational
+   *  component; see app/(app)/dashboard/page.tsx and
+   *  components/dashboard/meta-freshness-indicator.tsx. */
+  freshnessIndicator?: ReactNode;
+}) {
   const {
     monthLabel,
     metaSpendMinor,
@@ -61,13 +72,16 @@ export function MarketingPerformance({ data }: { data: MarketingPerformanceData 
 
   return (
     <div className="mt-8">
-      <div className="mb-4">
-        <h2 className="text-lg font-semibold tracking-tight text-zinc-900">
-          שיווק — {monthLabel}
-        </h2>
-        <p className="mt-0.5 text-xs text-zinc-500">
-          הוצאת מטא, לידים והכנסות עבור החודש שנבחר למעלה — אותו חודש לכל הדוח.
-        </p>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight text-zinc-900">
+            שיווק — {monthLabel}
+          </h2>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            הוצאת מטא, לידים והכנסות עבור החודש שנבחר למעלה — אותו חודש לכל הדוח.
+          </p>
+        </div>
+        {freshnessIndicator}
       </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

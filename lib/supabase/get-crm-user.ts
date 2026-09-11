@@ -1,4 +1,4 @@
-import { createClient } from "./server";
+import { createClient } from "./server.ts";
 
 export type CrmAuthResult =
   | { status: "unauthenticated" }

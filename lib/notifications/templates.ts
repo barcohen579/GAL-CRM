@@ -205,6 +205,99 @@ export function buildAutomaticFollowUpReminderEmail(input: AutomaticFollowUpRemi
 }
 
 // ------------------------------------------------------------------
+// Immediate new-lead notification — fired once, synchronously, by
+// app/api/zapier/facebook-leads/route.ts and
+// app/api/meta/leadgen-webhook/route.ts right after a genuinely NEW
+// Meta lead is durably persisted (see
+// lib/notifications/new-lead-notification.ts). Deliberately a THIRD,
+// distinct template from the two follow-up reminder ones above: this is
+// "a new lead just arrived", not "it's time to follow up again" — it
+// must never be confused with, and never replaces, the next-day
+// AUTOMATIC escalation email (buildAutomaticFollowUpReminderEmail).
+//
+// Unlike the follow-up templates, this one DOES include the raw phone
+// number directly in the body (per product requirement — Gal needs to
+// act on a brand-new lead immediately) rather than only a wa.me link;
+// the WhatsApp button is still included alongside it for convenience.
+// ------------------------------------------------------------------
+
+export type NewLeadNotificationInput = {
+  fullName: string;
+  phone: string | null;
+  email: string | null;
+  /** Human-readable source label, e.g. "Meta / Facebook Lead Ads". */
+  source: string;
+  /** ISO timestamp the lead was received — formatted here in Israel
+   *  time, same convention as every other email in this file. */
+  receivedAtIso: string;
+  campaignName: string | null;
+  formName: string | null;
+  adName: string | null;
+  recordUrl: string;
+  whatsappUrl: string | null;
+};
+
+function attributionLines(input: NewLeadNotificationInput): string[] {
+  const lines: string[] = [];
+  if (input.campaignName) lines.push(`קמפיין: ${input.campaignName}`);
+  if (input.formName) lines.push(`טופס: ${input.formName}`);
+  if (input.adName) lines.push(`מודעה: ${input.adName}`);
+  return lines;
+}
+
+export function buildNewLeadNotificationEmail(input: NewLeadNotificationInput): EmailContent {
+  const name = escapeHtml(input.fullName);
+  const receivedLabel = formatDateTime(input.receivedAtIso);
+  const attribution = attributionLines(input);
+
+  const subject = `ליד חדש נכנס מ-Meta — ${input.fullName}`;
+
+  const detailRows: { label: string; value: string }[] = [
+    { label: "שם מלא", value: input.fullName },
+    ...(input.phone ? [{ label: "טלפון", value: input.phone }] : []),
+    ...(input.email ? [{ label: "אימייל", value: input.email }] : []),
+    { label: "מקור", value: input.source },
+    { label: "התקבל", value: receivedLabel },
+    ...attribution.map((line) => {
+      const [label, ...rest] = line.split(": ");
+      return { label, value: rest.join(": ") };
+    }),
+  ];
+
+  const rowsHtml = detailRows
+    .map(
+      (row) => `
+        <p style="margin:0 0 6px; font-size:14px; color:#3f3f46;">
+          <span style="color:#71717a;">${escapeHtml(row.label)}:</span> ${escapeHtml(row.value)}
+        </p>`
+    )
+    .join("");
+
+  const html = `
+    <div dir="rtl" lang="he" style="${EMAIL_WRAPPER_STYLE}">
+      <div style="${CARD_STYLE}">
+        <h1 style="margin:0 0 12px; font-size:18px; color:#18181b;">ליד חדש נכנס מ-Meta</h1>
+        <p style="margin:0 0 12px; font-size:14px; color:#3f3f46;">${name} השאיר/ה פרטים עכשיו.</p>
+        ${rowsHtml}
+        ${actionsHtml(input.whatsappUrl, input.recordUrl)}
+      </div>
+    </div>
+  `.trim();
+
+  const textLines: string[] = [
+    subject,
+    "",
+    `${input.fullName} השאיר/ה פרטים עכשיו.`,
+    "",
+    ...detailRows.map((row) => `${row.label}: ${row.value}`),
+    "",
+    actionsText(input.whatsappUrl, input.recordUrl),
+  ];
+
+  return { subject, html, text: textLines.join("\n") };
+}
+
+// ------------------------------------------------------------------
 // Daily digest
 // ------------------------------------------------------------------
 

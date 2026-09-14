@@ -46,6 +46,10 @@ import {
   buildWhatsAppUrl,
 } from "../../../../lib/notifications/reminder-logic.ts";
 import {
+  isNewLeadNotificationRetryEligible,
+  sendNewLeadNotification,
+} from "../../../../lib/notifications/new-lead-notification.ts";
+import {
   ISRAEL_TIME_ZONE,
   zonedParts,
   zonedWallTimeToUtcIso,
@@ -65,6 +69,18 @@ export const maxDuration = 60;
 // (never hammers a genuinely down provider every single cron tick).
 const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MINUTES = 30;
+
+// Same bound, applied to the immediate new-lead notification's own
+// retry (see processNewLeadNotificationRetries below and
+// lib/notifications/new-lead-notification.ts's
+// isNewLeadNotificationRetryEligible) — a separate constant, not a
+// shared one, because these count a conceptually different thing
+// (immediate-email attempts on one meta_lead_ingestions row, not
+// follow-up-reminder attempts) even though the chosen number is the
+// same. No separate backoff constant is needed here: this whole route
+// only ticks once every ~2 hours (see vercel.json), which already
+// spaces retries out generously on its own.
+const MAX_NEW_LEAD_NOTIFICATION_ATTEMPTS = 5;
 
 // Target morning delivery "around 08:00 Israel time" (the task's own
 // wording) — real Israel wall-clock hour, DST-correct via zonedParts.
@@ -662,6 +678,177 @@ async function processAutomaticEscalations(supabase: SupabaseClient) {
   return { attempted, sent, failed };
 }
 
+// ------------------------------------------------------------------
+// Immediate new-lead notification retry — the safety net for a
+// TEMPORARY Resend/network failure on the synchronous first-attempt
+// email (see lib/notifications/new-lead-notification.ts's
+// sendNewLeadNotification, called from
+// app/api/zapier/facebook-leads/route.ts and
+// app/api/meta/leadgen-webhook/route.ts). Entirely separate from every
+// other job in this file: it reads/writes only meta_lead_ingestions +
+// a read-only lookup of the already-created contact, never touches
+// follow_up_tasks/follow_up_reminder_deliveries/
+// lead_auto_escalation_deliveries/daily_digest_deliveries, and leaves
+// the next-day AUTOMATIC follow-up escalation entirely unaffected.
+//
+// Dedup/idempotency, in order of guarantee:
+//   1. A resent facebookLeadId/leadgen_id never reaches this job at
+//      all — it resolves to "duplicate" at ingestion time (see
+//      shouldSendNewLeadNotification), so this job only ever
+//      reconsiders a row already known to be genuinely PROCESSED once.
+//   2. notification_sent_at is terminal — once set, this job's own
+//      candidate query (`.is("notification_sent_at", null)`) and
+//      isNewLeadNotificationRetryEligible both exclude the row forever.
+//   3. Each individual retry ATTEMPT is claimed via a single atomic
+//      compare-and-swap UPDATE keyed on the row's own
+//      notification_attempt_count: `SET notification_attempt_count =
+//      current + 1 WHERE id = :id AND notification_attempt_count =
+//      :current AND notification_sent_at IS NULL`. Two
+//      concurrent/repeated invocations racing for the same row can
+//      both read the same `current`, but Postgres serializes their
+//      UPDATEs — the loser's WHERE no longer matches once the winner's
+//      write commits, so it gets zero rows back and moves on, exactly
+//      mirroring lib/meta/repo.ts's own claimForProcessing technique
+//      (a status-transition CAS there; a counter-equality CAS here,
+//      since this table has no separate SENDING-style status column).
+type NewLeadNotificationRetryRow = {
+  id: string;
+  status: string;
+  contact_id: string | null;
+  lead_id: string | null;
+  meta_form_id: string | null;
+  meta_ad_id: string | null;
+  meta_campaign_id: string | null;
+  received_at: string;
+  raw_payload: Record<string, unknown> | null;
+  notification_sent_at: string | null;
+  notification_attempt_count: number;
+};
+
+export async function processNewLeadNotificationRetries(supabase: SupabaseClient) {
+  let appBaseUrl: string;
+  let recipient: string;
+  try {
+    appBaseUrl = getAppBaseUrl();
+    recipient = getGalNotificationEmail();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Notification config missing";
+    console.error(JSON.stringify({ step: "new_lead_notification_retry_config_error", message }));
+    return { attempted: 0, sent: 0, failed: 0, configError: message };
+  }
+
+  const { data, error } = await supabase
+    .from("meta_lead_ingestions")
+    .select(
+      "id, status, contact_id, lead_id, meta_form_id, meta_ad_id, meta_campaign_id, received_at, raw_payload, notification_sent_at, notification_attempt_count"
+    )
+    .eq("status", "PROCESSED")
+    .is("notification_sent_at", null)
+    .lt("notification_attempt_count", MAX_NEW_LEAD_NOTIFICATION_ATTEMPTS)
+    .not("contact_id", "is", null)
+    .not("lead_id", "is", null)
+    .limit(MAX_REMINDER_CANDIDATES_PER_RUN);
+
+  if (error) {
+    console.error(
+      JSON.stringify({ step: "new_lead_notification_retry_query_failed", message: error.message })
+    );
+    return { attempted: 0, sent: 0, failed: 0, error: error.message };
+  }
+
+  const provider = getEmailProvider();
+  let attempted = 0;
+  let sent = 0;
+  let failed = 0;
+
+  for (const row of (data ?? []) as unknown as NewLeadNotificationRetryRow[]) {
+    const eligible = isNewLeadNotificationRetryEligible(
+      {
+        ingestionStatus: row.status,
+        notificationSentAt: row.notification_sent_at,
+        notificationAttemptCount: row.notification_attempt_count,
+      },
+      { maxAttempts: MAX_NEW_LEAD_NOTIFICATION_ATTEMPTS }
+    );
+    if (!eligible) continue;
+
+    attempted += 1;
+
+    // Atomic claim (see this function's own header comment for the
+    // exact CAS mechanism).
+    const { data: claimed, error: claimError } = await supabase
+      .from("meta_lead_ingestions")
+      .update({ notification_attempt_count: row.notification_attempt_count + 1 })
+      .eq("id", row.id)
+      .eq("notification_attempt_count", row.notification_attempt_count)
+      .is("notification_sent_at", null)
+      .select("id");
+
+    if (claimError || !claimed || claimed.length === 0) {
+      continue; // lost the race (or a transient error) — next tick retries safely
+    }
+
+    if (!row.contact_id || !row.lead_id) continue; // defensive, already filtered by the query above
+
+    const { data: contact, error: contactError } = await supabase
+      .from("contacts")
+      .select("full_name, phone, email")
+      .eq("id", row.contact_id)
+      .maybeSingle();
+
+    if (contactError || !contact) {
+      await supabase
+        .from("meta_lead_ingestions")
+        .update({ notification_error: "Could not load contact for new-lead notification retry" })
+        .eq("id", row.id);
+      failed += 1;
+      continue;
+    }
+
+    // Zapier-originated rows store resolved campaign/form/ad NAMES in
+    // raw_payload (see lib/meta/zapier-ingest.ts's buildMetadata/
+    // insertIngestionRow call); the direct-webhook path only ever has
+    // ids (see lib/meta/webhook-payload.ts) — same distinction the
+    // ORIGINAL synchronous attempt already makes in each route.
+    const rawPayload = (row.raw_payload ?? {}) as Record<string, unknown>;
+    const viaZapier = rawPayload.via === "zapier";
+    let outcomeStatus: "SENT" | "FAILED" | null = null;
+
+    await sendNewLeadNotification({
+      provider,
+      recipient,
+      lead: {
+        fullName: contact.full_name as string,
+        phone: (contact.phone as string | null) ?? null,
+        email: (contact.email as string | null) ?? null,
+        source: viaZapier ? "Meta / Facebook Lead Ads (via Zapier)" : "Meta / Facebook Lead Ads",
+        receivedAtIso: row.received_at,
+        campaignName: viaZapier ? ((rawPayload.campaignName as string | null) ?? null) : row.meta_campaign_id,
+        formName: viaZapier ? ((rawPayload.formName as string | null) ?? null) : row.meta_form_id,
+        adName: viaZapier ? ((rawPayload.adName as string | null) ?? null) : row.meta_ad_id,
+        recordUrl: `${appBaseUrl}/leads/${row.lead_id}`,
+        whatsappUrl: buildWhatsAppUrl((contact.phone as string | null) ?? null),
+      },
+      recordNotification: async (result) => {
+        outcomeStatus = result.status;
+        await supabase
+          .from("meta_lead_ingestions")
+          .update(
+            result.status === "SENT"
+              ? { notification_sent_at: result.sentAt, notification_error: null }
+              : { notification_error: result.error }
+          )
+          .eq("id", row.id);
+      },
+    });
+
+    if (outcomeStatus === "SENT") sent += 1;
+    else failed += 1;
+  }
+
+  return { attempted, sent, failed };
+}
+
 export async function GET(request: Request): Promise<Response> {
   let expectedSecret: string;
   try {
@@ -680,12 +867,19 @@ export async function GET(request: Request): Promise<Response> {
   const reminders = await processReminders(supabase);
   const escalations = await processAutomaticEscalations(supabase);
   const digest = await processDailyDigest(supabase);
+  const newLeadNotificationRetries = await processNewLeadNotificationRetries(supabase);
 
   // Only ids/counts/dates — never a contact name, note, or email
   // address.
   console.log(
-    JSON.stringify({ step: "follow_up_notifications_cron_completed", reminders, escalations, digest })
+    JSON.stringify({
+      step: "follow_up_notifications_cron_completed",
+      reminders,
+      escalations,
+      digest,
+      newLeadNotificationRetries,
+    })
   );
 
-  return Response.json({ ok: true, reminders, escalations, digest });
+  return Response.json({ ok: true, reminders, escalations, digest, newLeadNotificationRetries });
 }

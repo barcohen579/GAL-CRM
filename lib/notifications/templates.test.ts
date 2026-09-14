@@ -4,6 +4,8 @@ import {
   buildManualFollowUpReminderEmail,
   buildAutomaticFollowUpReminderEmail,
   buildDailyDigestEmail,
+  buildNewLeadNotificationEmail,
+  type NewLeadNotificationInput,
 } from "./templates.ts";
 
 // ------------------------------------------------------------------
@@ -241,4 +243,111 @@ test("buildDailyDigestEmail: every item's time/name/reason/link appears in both 
 test("buildDailyDigestEmail: zero items still produces valid content (caller decides whether to actually send)", () => {
   const email = buildDailyDigestEmail([], "5 בספטמבר 2026");
   assert.equal(email.subject, "המעקבים שלך להיום — 0");
+});
+
+// ------------------------------------------------------------------
+// buildNewLeadNotificationEmail
+// ------------------------------------------------------------------
+
+const baseNewLeadInput: NewLeadNotificationInput = {
+  fullName: "מאיה כהן",
+  phone: "0501234567",
+  email: "maya@example.com",
+  source: "Meta / Facebook Lead Ads",
+  receivedAtIso: "2026-09-14T08:15:00.000Z",
+  campaignName: "קמפיין קיץ",
+  formName: "טופס ליד",
+  adName: "מודעה א",
+  recordUrl: "https://gal-crm.example.com/leads/abc-123",
+  whatsappUrl: "https://wa.me/972501234567",
+};
+
+test("buildNewLeadNotificationEmail: subject clearly indicates a new Meta lead", () => {
+  const email = buildNewLeadNotificationEmail(baseNewLeadInput);
+  assert.match(email.subject, /^ליד חדש נכנס מ-Meta/);
+  assert.match(email.subject, /מאיה כהן/);
+});
+
+// Guards against exactly the class of bug a terminal's RTL/BiDi
+// rendering can visually suggest but that never actually exists in the
+// source: this asserts the LOGICAL Unicode code point sequence the
+// subject is built from, byte for byte, not just "the right substrings
+// appear somewhere" (the two regex checks above). Built from explicit
+// \uXXXX escapes for the Hebrew prefix — deliberately not typed as a
+// literal Hebrew string in this one assertion — so a reviewer/diff tool
+// rendering this file right-to-left cannot mask a reordering bug here
+// the way it could in the source file itself.
+test("buildNewLeadNotificationEmail: subject is EXACTLY the required Hebrew/Latin string at the source Unicode level, not just visually", () => {
+  const email = buildNewLeadNotificationEmail(baseNewLeadInput);
+
+  // "ליד חדש נכנס מ-Meta" spelled out via \uXXXX escapes, left to right
+  // in source order: ל י ד (space) ח ד ש (space) נ כ נ ס (space) מ - M e t a
+  const expectedPrefix =
+    "ליד" + // ליד
+    " " +
+    "חדש" + // חדש
+    " " +
+    "נכנס" + // נכנס
+    " " +
+    "מ" + // מ
+    "-" + // -
+    "Meta";
+
+  assert.equal(expectedPrefix, "ליד חדש נכנס מ-Meta"); // sanity: escapes match the literal exactly
+  assert.equal(email.subject, `${expectedPrefix} — ${baseNewLeadInput.fullName}`);
+  assert.equal(email.subject, "ליד חדש נכנס מ-Meta — מאיה כהן");
+
+  // The separator between the fixed prefix and the lead's name must be
+  // a real em dash (U+2014), never an en dash (U+2013) or a bare
+  // hyphen-minus (U+002D). Checked via an explicit code point, not a
+  // literal dash character in this source file, so this assertion
+  // itself can't be silently miscopied.
+  assert.ok(email.subject.includes(String.fromCodePoint(0x2014)));
+  assert.ok(!email.subject.includes(String.fromCodePoint(0x2013)));
+
+  // No stray bidi control characters anywhere in the subject
+  // (U+200E/U+200F LRM/RLM, U+202A-U+202E embedding/override,
+  // U+2066-U+2069 isolates) — confirms the subject is built purely
+  // from ordinary characters, with any RTL/BiDi presentation left
+  // entirely to the mail client's own Unicode bidi algorithm rather
+  // than baked into the string.
+  const bidiControlCodePoints = [
+    0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069,
+  ];
+  for (const codePoint of bidiControlCodePoints) {
+    assert.ok(
+      !email.subject.includes(String.fromCodePoint(codePoint)),
+      `subject must not contain bidi control character U+${codePoint.toString(16).toUpperCase()}`
+    );
+  }
+});
+
+test("buildNewLeadNotificationEmail: includes full name, phone, source, timestamp and attribution in both HTML and text", () => {
+  const email = buildNewLeadNotificationEmail(baseNewLeadInput);
+  for (const body of [email.html, email.text]) {
+    assert.match(body, /מאיה כהן/);
+    assert.ok(body.includes("0501234567"));
+    assert.match(body, /Meta \/ Facebook Lead Ads/);
+    assert.match(body, /קמפיין קיץ/);
+    assert.match(body, /טופס ליד/);
+    assert.match(body, /מודעה א/);
+    assert.ok(body.includes(baseNewLeadInput.recordUrl));
+    assert.ok(body.includes(baseNewLeadInput.whatsappUrl!));
+  }
+});
+
+test("buildNewLeadNotificationEmail: omits phone/email/attribution lines that are null rather than rendering them empty", () => {
+  const email = buildNewLeadNotificationEmail({
+    ...baseNewLeadInput,
+    phone: null,
+    email: null,
+    campaignName: null,
+    formName: null,
+    adName: null,
+    whatsappUrl: null,
+  });
+  assert.ok(!email.text.includes("טלפון:"));
+  assert.ok(!email.text.includes("אימייל:"));
+  assert.ok(!email.text.includes("קמפיין:"));
+  assert.ok(!email.html.includes("wa.me"));
 });

@@ -5,6 +5,7 @@ import {
   CalendarPlus,
   CheckCircle2,
   XCircle,
+  MessageCircle,
   type LucideIcon,
 } from "lucide-react";
 import type { TimelineEvent, TimelineEventType } from "@/lib/crm/types";
@@ -17,6 +18,7 @@ const ICONS: Record<TimelineEventType, LucideIcon> = {
   FOLLOW_UP_CREATED: CalendarPlus,
   FOLLOW_UP_COMPLETED: CheckCircle2,
   FOLLOW_UP_CANCELLED: XCircle,
+  CONVERSATION: MessageCircle,
 };
 
 const ICON_TONE: Record<TimelineEventType, string> = {
@@ -26,6 +28,7 @@ const ICON_TONE: Record<TimelineEventType, string> = {
   FOLLOW_UP_CREATED: "bg-zinc-100 text-zinc-500",
   FOLLOW_UP_COMPLETED: "bg-emerald-50 text-emerald-600",
   FOLLOW_UP_CANCELLED: "bg-red-50 text-red-500",
+  CONVERSATION: "bg-amber-50 text-amber-600",
 };
 
 export function Timeline({ events }: { events: TimelineEvent[] }) {
@@ -51,7 +54,7 @@ export function Timeline({ events }: { events: TimelineEvent[] }) {
             <div className="min-w-0 flex-1 pt-0.5">
               <p className="text-sm text-zinc-800">{event.title}</p>
               {event.description && (
-                <p className="mt-0.5 text-xs text-zinc-500">{event.description}</p>
+                <p className="mt-0.5 whitespace-pre-wrap text-xs text-zinc-500">{event.description}</p>
               )}
               <p className="mt-0.5 text-[11px] text-zinc-400">
                 {formatDateTime(event.at)}

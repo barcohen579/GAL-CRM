@@ -71,9 +71,11 @@ begin
     raise exception 'ASSERTION FAILED (Scenario 1): expected exactly 1 PENDING MANUAL follow-up, got %', v_count;
   end if;
 
+  -- Lead Workflow V2: creating a MANUAL follow-up permanently closes the
+  -- lead's still-PENDING AUTOMATIC task (was: left PENDING and hidden).
   select status into v_automatic_task.status from public.follow_up_tasks where id = v_automatic_task.id;
-  if v_automatic_task.status <> 'PENDING' then
-    raise exception 'ASSERTION FAILED (Scenario 1): the AUTOMATIC follow-up must remain PENDING, untouched, while a MANUAL one exists';
+  if v_automatic_task.status <> 'CANCELLED' then
+    raise exception 'ASSERTION FAILED (Scenario 1): V2 — the AUTOMATIC follow-up must be closed once a MANUAL one is created, got %', v_automatic_task.status;
   end if;
 
   -----------------------------------------------------------------
@@ -107,8 +109,8 @@ begin
   end if;
 
   select status into v_automatic_task.status from public.follow_up_tasks where id = v_automatic_task.id;
-  if v_automatic_task.status <> 'PENDING' then
-    raise exception 'ASSERTION FAILED (Scenario 2): the AUTOMATIC follow-up must still be untouched (PENDING) after superseding a MANUAL one';
+  if v_automatic_task.status <> 'CANCELLED' then
+    raise exception 'ASSERTION FAILED (Scenario 2): V2 — the AUTOMATIC follow-up must stay closed (never recreated), got %', v_automatic_task.status;
   end if;
 
   -- The older MANUAL follow-up's own reminder-delivery row (created by

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test",
+    "test": "node --experimental-strip-types --no-warnings --test \"app/**/*.test.ts\" \"lib/**/*.test.ts\"",
     "meta:sync": "node scripts/meta-sync.mjs",
     "meta:reprocess-lead": "node scripts/meta-reprocess-lead.ts",
     "meta:webhook-demo": "node scripts/meta-webhook-mock-demo.ts",
@@ -24,7 +24,8 @@
     "db:test:one-current-manual-follow-up": "supabase db query --linked -f supabase/tests/one_current_manual_follow_up_per_lead.test.sql",
     "db:test:automatic-followup-10am": "supabase db query --linked -f supabase/tests/automatic_followup_10am.test.sql",
     "db:test:meta-sync-state": "supabase db query --linked -f supabase/tests/meta_sync_state.test.sql",
-    "db:test:general-payments": "supabase db query --linked -f supabase/tests/general_payments.test.sql"
+    "db:test:general-payments": "supabase db query --linked -f supabase/tests/general_payments.test.sql",
+    "db:test:lead-workflow-v2": "supabase db query --linked -f supabase/tests/lead_workflow_v2.test.sql"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

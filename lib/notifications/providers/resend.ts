@@ -54,6 +54,7 @@ export class ResendEmailProvider implements EmailProvider {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
+          ...(message.idempotencyKey ? { "Idempotency-Key": message.idempotencyKey } : {}),
         },
         body: JSON.stringify({
           from,
@@ -80,11 +81,19 @@ export class ResendEmailProvider implements EmailProvider {
     } catch {
       json = null;
     }
-    const body = (json ?? {}) as { id?: unknown; message?: unknown };
+    const body = (json ?? {}) as { id?: unknown; message?: unknown; name?: unknown };
 
     if (!res.ok) {
       const providerMessage = typeof body.message === "string" ? body.message : "no message";
-      return { ok: false, error: `Resend API error (HTTP ${res.status}): ${providerMessage}` };
+      const error = `Resend API error (HTTP ${res.status}): ${providerMessage}`;
+      // Same Idempotency-Key already used with a different payload: an
+      // earlier attempt for this exact delivery reached Resend. Never
+      // retry it under a new key — report it as already accepted.
+      // (concurrent_idempotent_requests stays a normal retryable failure.)
+      if (res.status === 409 && body.name === "invalid_idempotent_request") {
+        return { ok: false, error, alreadyAccepted: true };
+      }
+      return { ok: false, error };
     }
 
     // Do not mark a send as successful without a real confirmation id

@@ -3,6 +3,7 @@ import { CheckCircle2 } from "lucide-react";
 import type { FollowUpWithRelations } from "@/lib/crm/types";
 import { formatDateTime, formatRelative } from "@/lib/crm/format";
 import { FollowUpTaskActions } from "./follow-up-task-actions";
+import { followUpDisplayTitle } from "@/lib/crm/follow-up-visibility";
 
 export function FollowUpRow({
   task,
@@ -41,7 +42,7 @@ export function FollowUpRow({
               tone === "done" ? "text-zinc-500 line-through" : "text-zinc-900"
             }`}
           >
-            {task.title}
+            {followUpDisplayTitle(task)}
           </p>
         </div>
         {href ? (

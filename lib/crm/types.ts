@@ -5,6 +5,7 @@
 import type {
   LeadStage,
   LeadLostReason,
+  LeadConversationOutcome,
   ServiceType,
   TouchpointChannel,
 } from "./constants";
@@ -154,6 +155,21 @@ export type StageEvent = {
   to_stage: LeadStage;
   changed_at: string;
   note: string | null;
+  // Structured LOST reason captured at the transition (V2). Older rows
+  // may only carry the reason code in `note`.
+  lost_reason?: LeadLostReason | null;
+  lost_reason_note?: string | null;
+};
+
+// One append-only conversation update (lead_conversation_updates).
+export type ConversationUpdate = {
+  id: string;
+  outcome: LeadConversationOutcome;
+  note: string | null;
+  stage_before: LeadStage;
+  stage_after: LeadStage;
+  follow_up_task_id: string | null;
+  created_at: string;
 };
 
 // Full detail shape for the /leads/[id] page.
@@ -163,12 +179,14 @@ export type LeadDetail = {
   stage_changed_at: string;
   interested_services: InterestedService[];
   lost_reason: LeadLostReason | null;
+  lost_reason_note?: string | null;
   created_at: string;
   updated_at: string;
   contact: ContactSummaryWithReferral & { notes: string | null };
   touchpoints: TouchpointDetail[];
   follow_up_tasks: FollowUpTask[];
   stage_events: StageEvent[];
+  conversation_updates?: ConversationUpdate[];
 };
 
 // Full detail shape for the /customers/[id] page.
@@ -197,7 +215,8 @@ export type TimelineEventType =
   | "TOUCHPOINT"
   | "FOLLOW_UP_CREATED"
   | "FOLLOW_UP_COMPLETED"
-  | "FOLLOW_UP_CANCELLED";
+  | "FOLLOW_UP_CANCELLED"
+  | "CONVERSATION";
 
 export type TimelineEvent = {
   id: string;

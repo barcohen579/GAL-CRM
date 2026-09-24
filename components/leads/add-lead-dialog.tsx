@@ -230,6 +230,45 @@ export function AddLeadDialog({
             </button>
           </div>
         </form>
+
+        {state.duplicate && (
+          // Possible duplicate: nothing was created. Gal decides — open
+          // the existing record, or explicitly create a separate lead
+          // anyway (never an automatic merge). The submitted values are
+          // echoed back by the action and re-sent from hidden fields,
+          // since the main form above is reset after every submission.
+          <form action={formAction} className="border-t border-amber-200 bg-amber-50 px-5 py-4">
+            <p role="alert" className="text-sm text-amber-900">
+              כבר קיים איש קשר עם אותו טלפון או אימייל:{" "}
+              <strong>{state.duplicate.contactName}</strong>. הליד לא נוצר.
+            </p>
+            <input type="hidden" name="allow_duplicate" value="1" />
+            {Object.entries(state.duplicate.values).flatMap(([key, value]) =>
+              Array.isArray(value)
+                ? value.map((v) => <input key={`${key}-${v}`} type="hidden" name={key} value={v} />)
+                : value
+                  ? [<input key={key} type="hidden" name={key} value={value} />]
+                  : []
+            )}
+            <div className="mt-3 flex flex-wrap justify-end gap-2">
+              {state.duplicate.leadId && (
+                <a
+                  href={`/leads/${state.duplicate.leadId}`}
+                  className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100"
+                >
+                  פתיחת הליד הקיים
+                </a>
+              )}
+              <button
+                type="submit"
+                disabled={isPending}
+                className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
+              >
+                זה איש קשר אחר — ליצור ליד חדש בכל זאת
+              </button>
+            </div>
+          </form>
+        )}
       </dialog>
     </>
   );

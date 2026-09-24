@@ -34,7 +34,7 @@ import {
   SERVICE_TYPE_LABELS,
 } from "@/lib/crm/constants";
 import { formatDate, formatMoney, formatRelative } from "@/lib/crm/format";
-import { filterActionableFollowUps } from "@/lib/crm/follow-up-visibility";
+import { filterActionableFollowUps, followUpDisplayTitle } from "@/lib/crm/follow-up-visibility";
 import {
   resolveSelectedMonth,
   currentMonthKey,
@@ -724,7 +724,7 @@ export default async function DashboardPage({
                   <>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-zinc-900">
-                        {task.title}
+                        {followUpDisplayTitle(task)}
                       </p>
                       <p className="truncate text-xs text-zinc-500">{name}</p>
                     </div>

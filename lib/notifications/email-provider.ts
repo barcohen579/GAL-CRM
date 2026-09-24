@@ -13,11 +13,21 @@ export type EmailMessage = {
    *  keeps every email this system sends readable even in a client
    *  that can't/won't render HTML. */
   text: string;
+  /** Provider-side dedupe key (Resend `Idempotency-Key`, 24h window).
+   *  The reminder job passes one derived from the delivery row id, so a
+   *  retry of an attempt that may already have been accepted (e.g. the
+   *  process died right after the provider answered) can never produce
+   *  a second email. */
+  idempotencyKey?: string;
 };
 
 export type EmailSendResult =
   | { ok: true; providerMessageId: string }
-  | { ok: false; error: string };
+  /** alreadyAccepted: the provider reports this idempotency key was
+   *  already used by an earlier request with a different payload — an
+   *  earlier attempt reached the provider, so the email must be treated
+   *  as sent and never re-sent under a new key. */
+  | { ok: false; error: string; alreadyAccepted?: boolean };
 
 export interface EmailProvider {
   /** Never throws — every failure mode (missing config, network error,

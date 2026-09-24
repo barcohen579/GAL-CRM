@@ -122,3 +122,41 @@ test("parseZapierLeadPayload: an unparseable occurredAt is dropped to null rathe
   if (!result.ok) return;
   assert.equal(result.value.occurredAt, null);
 });
+
+// Lead Workflow V2: the Production Zap prefixes the real leadgen id with
+// the literal text "facebookLeadId" — normalized so the Zapier and direct
+// Meta webhook paths dedupe on the same key.
+test("normalizeZapierFacebookLeadId: strips the literal 'facebookLeadId' prefix to the numeric leadgen id", async () => {
+  const { normalizeZapierFacebookLeadId } = await import("./zapier-payload.ts");
+  assert.equal(normalizeZapierFacebookLeadId("facebookLeadId1234567890123456"), "1234567890123456");
+  assert.equal(normalizeZapierFacebookLeadId("1234567890123456"), "1234567890123456");
+  assert.equal(normalizeZapierFacebookLeadId(" 1234567890123456 "), "1234567890123456");
+  assert.equal(normalizeZapierFacebookLeadId("zap-lead-A"), "zap-lead-A");
+});
+
+test("the same Facebook lead via Zapier (prefixed id) and the direct webhook (numeric id) is ONE ingestion — the second is a duplicate", async () => {
+  const { parseZapierLeadPayload } = await import("./zapier-payload.ts");
+  const { processZapierLead } = await import("./zapier-ingest.ts");
+  const { processOneLeadgenId } = await import("./ingest.ts");
+  const { createFakeDb, createFakeMetaIngestionRepo } = await import("./fakes.ts");
+  const db = createFakeDb();
+  const repo = createFakeMetaIngestionRepo(db);
+
+  const parsed = parseZapierLeadPayload({ facebookLeadId: "facebookLeadId1234567890123456", fullName: "דנה", phone: "0501234567" });
+  assert.ok(parsed.ok);
+  if (!parsed.ok) return;
+  const viaZapier = await processZapierLead(repo, parsed.value, new Date().toISOString());
+  assert.equal(viaZapier.outcome, "processed");
+
+  const viaWebhook = await processOneLeadgenId(
+    repo,
+    "1234567890123456",
+    { metaPageId: "p", metaFormId: null, metaAdId: null, metaAdsetId: null, metaCampaignId: null, receivedAt: new Date().toISOString(), rawPayload: null },
+    {
+      derivePageAccessToken: async () => "t",
+      fetchLead: async () => { throw new Error("must not refetch a lead that was already ingested"); },
+    }
+  );
+  assert.equal(viaWebhook.outcome, "duplicate");
+  assert.equal(db.touchpoints.size, 1);
+});

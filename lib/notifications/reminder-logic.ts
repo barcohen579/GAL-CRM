@@ -1,202 +1,86 @@
-// Pure decision logic for "should THIS follow-up's reminder be sent
-// right now" — no Supabase, no network, so every rule the task
-// requires (future -> no, due -> yes, completed -> no, cancelled -> no,
-// already-sent -> no duplicate, safe/bounded retry) is directly unit-
-// testable in isolation, same "fetch/compute split" convention as
-// lib/crm/marketing.ts. app/api/cron/follow-up-notifications/route.ts
-// does the actual DB reads/claim/send and calls this for the decision.
+// Pure decision logic for the Lead Workflow V2 reminder emails — no
+// Supabase, no network, so every rule is directly unit-testable.
+//
+// V2 has exactly two routine reminder emails, both ONE-SHOT per
+// follow_up_tasks row and both delivered through the same
+// follow_up_reminder_deliveries ledger:
+//   - NEW_LEAD: the AUTOMATIC task every new lead gets (10:00 Israel on
+//     the next Sun-Thu after creation).
+//   - MANUAL:   a follow-up Gal scheduled that is still open at 10:00
+//     Israel on the next Sun-Thu after its due date.
+// WHEN a reminder becomes eligible is stored per delivery row
+// (remind_at, computed by SQL follow_up_reminder_at(); TS mirror:
+// lib/crm/timezone.ts followUpReminderAtIso). WHICH rows get claimed,
+// and the concurrency/retry/stale-SENDING rules, live in SQL
+// claim_due_follow_up_reminders(). This file only decides what to do
+// with a row that has already been claimed.
 
 import type { EmailSendResult } from "./email-provider.ts";
 import { normalizePhone } from "../meta/normalize.ts";
 
 export type FollowUpTaskStatus = "PENDING" | "COMPLETED" | "CANCELLED";
-export type ReminderDeliveryStatus = "PENDING" | "SENDING" | "SENT" | "FAILED";
 export type FollowUpTaskSource = "MANUAL" | "AUTOMATIC" | "AI_SUGGESTED";
+export type ReminderKind = "NEW_LEAD" | "MANUAL";
 
-export type ReminderEligibilityInput = {
-  taskStatus: FollowUpTaskStatus;
-  /** AUTOMATIC-sourced follow-ups never go through this one-shot path —
-   *  see isAutomaticEscalationEligible below for their own, repeating
-   *  eligibility rule. Keeping the exclusion here (not just as a query
-   *  filter in the route) makes it a directly testable rule like every
-   *  other one in this function, and a second, independent guard on top
-   *  of the query filter. */
-  taskSource: FollowUpTaskSource;
-  /** ISO timestamp — the follow-up's own due_at. */
-  dueAtIso: string;
-  deliveryStatus: ReminderDeliveryStatus;
-  attemptCount: number;
-  /** ISO timestamp of the last claim attempt, or null if never attempted. */
-  lastAttemptedAtIso: string | null;
-};
-
-export type ReminderEligibilityConfig = {
-  maxAttempts: number;
-  backoffMinutes: number;
-};
-
-/** Whether this follow-up's reminder should be attempted right now,
- *  given `now`. Every rule here is deliberately explicit rather than
- *  folded into one boolean expression, so each one maps 1:1 to a named
- *  test case:
- *   - a COMPLETED or CANCELLED task never gets a reminder, regardless
- *     of its delivery row's own state.
- *   - a future due_at (> now) is never eligible yet.
- *   - SENT is terminal — never resent, no matter how many times this
- *     is called (the actual duplicate-prevention guarantee is still
- *     the DB claim in the route; this is the same rule expressed at
- *     the decision-logic level so it's independently testable).
- *   - SENDING means another attempt currently owns this delivery
- *     (or a previous run crashed mid-send without recording a
- *     terminal result) — never claimed again by ELIGIBILITY alone;
- *     the route's own claim step is a second, DB-level guard.
- *   - FAILED is retried only within maxAttempts, and only after
- *     backoffMinutes have passed since the last attempt — an
- *     unconditional immediate retry could hammer a genuinely down
- *     provider every single cron tick. */
-export function isReminderEligible(
-  input: ReminderEligibilityInput,
-  now: Date,
-  config: ReminderEligibilityConfig
-): boolean {
-  if (input.taskStatus !== "PENDING") return false;
-  if (input.taskSource === "AUTOMATIC") return false;
-  if (new Date(input.dueAtIso).getTime() > now.getTime()) return false;
-
-  switch (input.deliveryStatus) {
-    case "SENT":
-      return false;
-    case "SENDING":
-      return false;
-    case "PENDING":
-      return true;
-    case "FAILED": {
-      if (input.attemptCount >= config.maxAttempts) return false;
-      if (input.lastAttemptedAtIso) {
-        const backoffUntilMs =
-          new Date(input.lastAttemptedAtIso).getTime() + config.backoffMinutes * 60_000;
-        if (now.getTime() < backoffUntilMs) return false;
-      }
-      return true;
-    }
-  }
+export function reminderKindForSource(source: FollowUpTaskSource): ReminderKind {
+  return source === "AUTOMATIC" ? "NEW_LEAD" : "MANUAL";
 }
 
-/** The WhatsApp deep link Gal can tap, straight from a reminder email,
- *  to open a chat with this Lead/Customer — or null when there is no
- *  usable phone number on file. Reuses normalizePhone
- *  (lib/meta/normalize.ts) — the same Israel-aware "leading 0 -> 972"
- *  digit normalization already trusted for Meta Lead Ads contact
- *  matching — rather than a second, inconsistent phone-parsing
- *  implementation living in the notifications system. Deliberately
- *  returns only the resulting wa.me URL, never the phone number
- *  itself: neither buildManualFollowUpReminderEmail nor
- *  buildAutomaticFollowUpReminderEmail (lib/notifications/templates.ts)
- *  accepts a raw phone at all, only this URL, so a raw phone number
- *  can never leak into an email body through this path. */
+/** Why an already-claimed reminder must NOT be sent after all (the task
+ *  or lead changed between the claim query and this check), or null
+ *  when it should be sent. The SQL claim already filters these; this is
+ *  the second, independently testable guard against a stale read. */
+export function reminderSkipReason(input: {
+  taskStatus: FollowUpTaskStatus | null;
+  leadStage: string | null;
+  hasParent: boolean;
+}): string | null {
+  if (input.taskStatus === null) return "task not found";
+  if (input.taskStatus !== "PENDING") return "task no longer pending";
+  if (!input.hasParent) return "task has no linked lead or customer";
+  if (input.leadStage === "WON" || input.leadStage === "LOST") return "lead already resolved";
+  return null;
+}
+
+/** Stable per-delivery provider idempotency key: every attempt for the
+ *  same delivery row reuses it, so Resend never delivers it twice
+ *  within its 24h idempotency window. */
+export function reminderIdempotencyKey(deliveryId: string): string {
+  return `gal-crm-follow-up-reminder-${deliveryId}`;
+}
+
+export type DeliveryOutcome =
+  | { status: "SENT"; sentAtIso: string; providerMessageId: string | null; note: string | null }
+  | { status: "FAILED"; error: string };
+
+/** "What the provider returned" -> "what the delivery row becomes".
+ *  SENT only on a confirmed acceptance (a real message id), or when the
+ *  provider reports this delivery's idempotency key was already used by
+ *  an earlier attempt (that attempt reached the provider — re-sending
+ *  under a new key would be the duplicate we must avoid). Everything
+ *  else is FAILED (bounded retry in SQL). */
+export function deliveryOutcomeForSendResult(result: EmailSendResult, now: Date): DeliveryOutcome {
+  if (result.ok) {
+    return { status: "SENT", sentAtIso: now.toISOString(), providerMessageId: result.providerMessageId, note: null };
+  }
+  if (result.alreadyAccepted) {
+    return {
+      status: "SENT",
+      sentAtIso: now.toISOString(),
+      providerMessageId: null,
+      note: "provider reported this delivery's idempotency key as already used — treated as sent",
+    };
+  }
+  return { status: "FAILED", error: result.error };
+}
+
+/** The WhatsApp deep link for a Lead/Customer phone, or null when there
+ *  is no usable phone on file (then no WhatsApp button is shown). Reuses
+ *  normalizePhone (lib/meta/normalize.ts) — the same Israel-aware
+ *  normalization used for Meta contact matching. This only builds a
+ *  link Gal can tap; the CRM never sends WhatsApp messages itself. */
 export function buildWhatsAppUrl(phone: string | null | undefined): string | null {
   const normalized = normalizePhone(phone);
   if (!normalized) return null;
   return `https://wa.me/${normalized}`;
-}
-
-export type DeliveryTerminalUpdate =
-  | { status: "SENT"; sent_at: string; provider_message_id: string; last_error: null }
-  | { status: "FAILED"; last_error: string };
-
-/** Pure translation from "what the email provider actually returned"
- *  to "what the delivery row should be updated to" — the literal rule
- *  under test for "provider failure must never be falsely recorded as
- *  SENT": there is exactly one code path that can ever produce a SENT
- *  update, and it requires `result.ok === true` with a real
- *  provider_message_id already attached by the provider adapter (see
- *  EmailProvider's own contract — an adapter is not allowed to return
- *  `ok: true` without one). Every other case, including any provider
- *  bug that would return a malformed `ok: true` result, falls through
- *  to FAILED via the exhaustive switch below. `now` is injected (never
- *  read internally) so this stays deterministic and dependency-free. */
-export function deliveryUpdateForSendResult(
-  result: EmailSendResult,
-  now: Date
-): DeliveryTerminalUpdate {
-  if (result.ok) {
-    return {
-      status: "SENT",
-      sent_at: now.toISOString(),
-      provider_message_id: result.providerMessageId,
-      last_error: null,
-    };
-  }
-  return { status: "FAILED", last_error: result.error };
-}
-
-// ------------------------------------------------------------------
-// Automatic new-lead follow-up escalation (Automatic Lead Follow-Up
-// Escalation Loop) — a REPEATING notification, unlike the one-shot
-// individual reminder above: the same AUTOMATIC follow_up_tasks row
-// (created once, at lead-creation time, by the
-// create_automatic_followup_for_new_lead() trigger) can generate a
-// fresh "still waiting" email once per eligible Israel calendar day,
-// for as long as the lead is unresolved. The actual "never twice for
-// the same lead/task + Israel day" guarantee is a DB unique constraint
-// (follow_up_task_id, escalation_date) on lead_auto_escalation_deliveries
-// — this function only decides whether the attempt is even worth
-// making (so the route can skip a DB round-trip for obviously
-// ineligible candidates), same "pure decision, DB enforces the actual
-// dedupe" split as isReminderEligible/the reminder-deliveries claim.
-// ------------------------------------------------------------------
-
-export type LeadStageForEscalation = string; // "WON" | "LOST" | any other lead_stage value
-
-export type EscalationEligibilityInput = {
-  taskStatus: FollowUpTaskStatus;
-  taskSource: FollowUpTaskSource;
-  /** ISO timestamp — the automatic follow-up's own due_at (its Day-0
-   *  target date). */
-  dueAtIso: string;
-  leadStage: LeadStageForEscalation;
-  /** True when this lead has ANY OTHER still-PENDING follow-up whose
-   *  source is NOT AUTOMATIC (i.e. a manually scheduled one) — per the
-   *  spec's §6 "manual follow-ups take priority": a manual follow-up
-   *  suspends the automatic daily escalation entirely while it exists,
-   *  with no separate stored "suspended" state needed — this is simply
-   *  re-checked live on every cron tick, so escalation resumes on its
-   *  own the moment the manual one is completed/cancelled (still no
-   *  WON/LOST, still PENDING here), with no backdating. */
-  hasCompetingManualFollowUp: boolean;
-};
-
-/** Whether an automatic escalation attempt for this follow-up is worth
- *  making right now, given `now` and whether `now`'s real Israel
- *  calendar day is an eligible one (caller computes that once per cron
- *  tick via isFollowUpBusinessDay — a single fact for the whole run,
- *  not per-candidate, so it is injected rather than recomputed here).
- *  Every rule maps 1:1 to a spec requirement:
- *   - only a still-PENDING, AUTOMATIC-sourced task is ever considered
- *     (a MANUAL/AI_SUGGESTED task never enters this path; a COMPLETED/
- *     CANCELLED one — including one auto-cancelled by WON/LOST — is
- *     never eligible again, regardless of source).
- *   - WON/LOST always stops the loop (belt-and-suspenders: the
- *     authoritative stop is the transactional auto-cancel in
- *     change_lead_stage()/convert_lead_to_won(), which flips the task
- *     to CANCELLED and already fails the status check above — this is
- *     a second, independently testable guard against a stale read).
- *   - a future due_at (Day-0 hasn't arrived yet) is never eligible.
- *   - Friday/Saturday never generate an occurrence — the caller-
- *     supplied `isBusinessDayToday` is the single source of truth for
- *     that, matching this repo's "inject now, never read it internally"
- *     convention.
- *   - a competing manual follow-up suspends escalation entirely. */
-export function isAutomaticEscalationEligible(
-  input: EscalationEligibilityInput,
-  now: Date,
-  isBusinessDayToday: boolean
-): boolean {
-  if (input.taskStatus !== "PENDING") return false;
-  if (input.taskSource !== "AUTOMATIC") return false;
-  if (input.leadStage === "WON" || input.leadStage === "LOST") return false;
-  if (new Date(input.dueAtIso).getTime() > now.getTime()) return false;
-  if (!isBusinessDayToday) return false;
-  if (input.hasCompetingManualFollowUp) return false;
-  return true;
 }

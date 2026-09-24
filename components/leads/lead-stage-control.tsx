@@ -5,6 +5,7 @@ import { ChevronDown } from "lucide-react";
 import { changeLeadStage } from "@/app/(app)/leads/actions";
 import { LostReasonDialog } from "./lost-reason-dialog";
 import { WonConversionDialog } from "./won-conversion-dialog";
+import { ConversationUpdateDialog } from "./conversation-update-dialog";
 import { Badge } from "@/components/ui/badge";
 import {
   LEAD_STAGES,
@@ -14,10 +15,11 @@ import {
   type ServiceType,
 } from "@/lib/crm/constants";
 
-// Compact, click-to-open stage switcher. Lives on both the kanban card
-// (compact) and the lead details page (same component — deeper
-// management stays in the details view per the design brief, but the
-// stage control itself is explicitly requested on the card too).
+// Stage menu. CONTACTED ("נוצר קשר") and INTERESTED ("מתעניינת") open the
+// structured conversation update (outcome + note + optional follow-up);
+// LOST requires a reason; WON opens the conversion dialog. A WON lead's
+// stage is final (the DB rejects moving it back), so its badge is shown
+// without a menu.
 export function LeadStageControl({
   leadId,
   stage,
@@ -36,6 +38,16 @@ export function LeadStageControl({
   const [isPending, startTransition] = useTransition();
   const lostDialogRef = useRef<HTMLDialogElement>(null);
   const wonDialogRef = useRef<HTMLDialogElement>(null);
+  const contactedDialogRef = useRef<HTMLDialogElement>(null);
+  const interestedDialogRef = useRef<HTMLDialogElement>(null);
+
+  if (stage === "WON") {
+    return <Badge tone={LEAD_STAGE_TONE[stage]}>{LEAD_STAGE_LABELS[stage]}</Badge>;
+  }
+
+  // A LOST lead reopened to CONTACTED/INTERESTED changes stage directly;
+  // conversation updates are recorded on open leads.
+  const isOpenLead = stage !== "LOST";
 
   function handleSelect(next: LeadStage) {
     setMenuOpen(false);
@@ -47,6 +59,14 @@ export function LeadStageControl({
     }
     if (next === "WON") {
       wonDialogRef.current?.showModal();
+      return;
+    }
+    if (next === "CONTACTED" && isOpenLead) {
+      contactedDialogRef.current?.showModal();
+      return;
+    }
+    if (next === "INTERESTED" && isOpenLead) {
+      interestedDialogRef.current?.showModal();
       return;
     }
 
@@ -123,6 +143,24 @@ export function LeadStageControl({
         contactName={contactName}
         interestedServices={interestedServices}
       />
+      {isOpenLead && (
+        <>
+          <ConversationUpdateDialog
+            ref={contactedDialogRef}
+            leadId={leadId}
+            currentStage={stage}
+            targetStage="CONTACTED"
+            onDone={() => contactedDialogRef.current?.close()}
+          />
+          <ConversationUpdateDialog
+            ref={interestedDialogRef}
+            leadId={leadId}
+            currentStage={stage}
+            targetStage="INTERESTED"
+            onDone={() => interestedDialogRef.current?.close()}
+          />
+        </>
+      )}
     </div>
   );
 }

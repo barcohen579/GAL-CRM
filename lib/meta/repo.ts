@@ -65,9 +65,11 @@ export interface MetaIngestionRepo {
    *  status — the caller must treat that as "someone else is handling
    *  it / it already finished", never retry the claim itself. */
   claimForProcessing(id: string): Promise<IngestionRow | null>;
+  /** createdNewLead (V2): false when the submission only attached a
+   *  touchpoint to the contact's existing open lead. */
   markProcessed(
     id: string,
-    ids: { contactId: string; leadId: string; touchpointId: string }
+    ids: { contactId: string; leadId: string; touchpointId: string; createdNewLead?: boolean }
   ): Promise<void>;
   markDuplicate(
     id: string,
@@ -238,6 +240,7 @@ export function createSupabaseMetaIngestionRepo(supabase: SupabaseClient): MetaI
           touchpoint_id: ids.touchpointId,
           processed_at: new Date().toISOString(),
           error_message: null,
+          created_new_lead: ids.createdNewLead ?? null,
         })
         .eq("id", id);
       if (error) throw new Error(`meta_lead_ingestions markProcessed failed: ${error.message}`);

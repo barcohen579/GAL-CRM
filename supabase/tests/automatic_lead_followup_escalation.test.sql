@@ -121,13 +121,21 @@ begin
     perform public.change_lead_stage(v_lead, 'CONTACTED');
   end;
 
-  -- Ordinary stage progression (NEW -> CONTACTED) must NOT touch any
-  -- follow-up.
+  -- Lead Workflow V2: moving past NEW (NEW -> CONTACTED) means the lead is
+  -- being handled — it closes the AUTOMATIC new-lead task (with a
+  -- reason), but never touches a MANUAL follow-up.
   if exists (
     select 1 from public.follow_up_tasks
-    where lead_id = v_lead and status <> 'PENDING'
+    where lead_id = v_lead and source = 'MANUAL' and status <> 'PENDING'
   ) then
-    raise exception 'ASSERTION FAILED (Scenario 4): NEW -> CONTACTED incorrectly closed a follow-up';
+    raise exception 'ASSERTION FAILED (Scenario 4): NEW -> CONTACTED incorrectly closed a MANUAL follow-up';
+  end if;
+  if exists (
+    select 1 from public.follow_up_tasks
+    where lead_id = v_lead and source = 'AUTOMATIC'
+      and (status <> 'CANCELLED' or auto_closed_reason is null)
+  ) then
+    raise exception 'ASSERTION FAILED (Scenario 4): V2 — NEW -> CONTACTED must close the AUTOMATIC task with a reason';
   end if;
 
   select customer_id, purchase_id into v_row

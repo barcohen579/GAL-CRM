@@ -60,6 +60,20 @@ function asOptionalIsoDate(value: unknown): string | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+/** The Production Zap sends facebookLeadId as the literal text
+ *  "facebookLeadId" followed by Meta's real numeric leadgen id (verified
+ *  read-only against every Zapier ingestion row: 31/31 have that shape,
+ *  and for all 16 leads that also arrived via the direct Meta webhook the
+ *  suffix equals that webhook's leadgen_id). Normalizing to the bare
+ *  numeric id makes both ingestion paths share ONE idempotency key
+ *  (meta_lead_ingestions.leadgen_id / touchpoints.external_ref), so the
+ *  same Facebook lead arriving through both is recognized as a duplicate.
+ *  Any other value is kept as-is. */
+export function normalizeZapierFacebookLeadId(raw: string): string {
+  const match = /^\s*(?:facebookLeadId)?\s*[:=_-]?\s*(\d{6,})\s*$/i.exec(raw);
+  return match ? match[1] : raw.trim();
+}
+
 export function parseZapierLeadPayload(body: unknown): ParseZapierLeadResult {
   const errors: string[] = [];
 
@@ -89,7 +103,7 @@ export function parseZapierLeadPayload(body: unknown): ParseZapierLeadResult {
   return {
     ok: true,
     value: {
-      facebookLeadId: facebookLeadId!,
+      facebookLeadId: normalizeZapierFacebookLeadId(facebookLeadId!),
       fullName: fullName!,
       phone: phone!,
       email: asOptionalString(b.email),

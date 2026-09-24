@@ -29,13 +29,6 @@ import { verifyZapierAuthHeader } from "../../../../lib/meta/zapier-auth.ts";
 import { parseZapierLeadPayload } from "../../../../lib/meta/zapier-payload.ts";
 import { createSupabaseMetaIngestionRepo } from "../../../../lib/meta/repo.ts";
 import { processZapierLead } from "../../../../lib/meta/zapier-ingest.ts";
-import { getEmailProvider } from "../../../../lib/notifications/get-email-provider.ts";
-import { getAppBaseUrl, getGalNotificationEmail } from "../../../../lib/notifications/env.ts";
-import { buildWhatsAppUrl } from "../../../../lib/notifications/reminder-logic.ts";
-import {
-  shouldSendNewLeadNotification,
-  sendNewLeadNotification,
-} from "../../../../lib/notifications/new-lead-notification.ts";
 
 // node:crypto (used by zapier-auth.ts) requires the Node runtime, not
 // the Edge runtime.
@@ -89,59 +82,12 @@ export async function POST(request: Request): Promise<Response> {
     })
   );
 
-  // Immediate new-lead email — fired at most once, only for a
-  // genuinely first-time-processed lead (see
-  // shouldSendNewLeadNotification's own doc comment for why this can
-  // never fire twice for a retried/duplicated facebookLeadId). Awaited
-  // so a config/logging issue is visible in this request's own logs,
-  // but sendNewLeadNotification itself never throws and never affects
-  // the response below — the lead is already durably persisted by this
-  // point regardless of what happens to the email. This is entirely
-  // separate from, and does not replace, the next-day AUTOMATIC
-  // follow-up escalation (app/api/cron/follow-up-notifications).
-  if (shouldSendNewLeadNotification(outcome)) {
-    try {
-      const appBaseUrl = getAppBaseUrl();
-      const recipient = getGalNotificationEmail();
-      await sendNewLeadNotification({
-        provider: getEmailProvider(),
-        recipient,
-        lead: {
-          fullName: parsed.value.fullName,
-          phone: parsed.value.phone,
-          email: parsed.value.email,
-          source: parsed.value.source ?? "Meta / Facebook Lead Ads (via Zapier)",
-          receivedAtIso: parsed.value.occurredAt ?? receivedAt,
-          campaignName: parsed.value.campaignName,
-          formName: parsed.value.formName,
-          adName: parsed.value.adName,
-          recordUrl: `${appBaseUrl}/leads/${outcome.leadId}`,
-          whatsappUrl: buildWhatsAppUrl(parsed.value.phone),
-        },
-        recordNotification: async (result) => {
-          // This is always the row's FIRST notification attempt (a
-          // fresh meta_lead_ingestions row starts notification_attempt_count
-          // at 0 — see the migration) — no concurrency risk, so no CAS
-          // claim is needed here, unlike processNewLeadNotificationRetries'
-          // own retry claim (app/api/cron/follow-up-notifications).
-          await supabase
-            .from("meta_lead_ingestions")
-            .update(
-              result.status === "SENT"
-                ? { notification_sent_at: result.sentAt, notification_error: null, notification_attempt_count: 1 }
-                : { notification_error: result.error, notification_attempt_count: 1 }
-            )
-            .eq("id", outcome.ingestionId);
-        },
-      });
-    } catch (err) {
-      // Only a missing APP_BASE_URL/GAL_NOTIFICATION_EMAIL config can
-      // reach here (sendNewLeadNotification itself never throws) — log
-      // and move on; the lead is unaffected.
-      const message = err instanceof Error ? err.message : "Notification config missing";
-      console.error(JSON.stringify({ step: "zapier_new_lead_notification_config_error", message }));
-    }
-  }
+  // Lead Workflow V2: no immediate email is sent for a new lead. The
+  // create_automatic_followup_for_new_lead() DB trigger gives every NEW
+  // lead exactly one reminder (10:00 Israel, next Sun-Thu), sent by
+  // app/api/cron/follow-up-notifications. A repeated submission that
+  // attaches to an existing open lead creates no new lead, no new task
+  // and no email.
 
   switch (outcome.outcome) {
     case "processed":

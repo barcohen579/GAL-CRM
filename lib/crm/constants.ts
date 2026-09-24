@@ -54,25 +54,84 @@ export const LEAD_STAGE_TONE: Record<LeadStage, Tone> = {
   LOST: "danger",
 };
 
+// Selectable LOST reasons, in the owner-approved display order (see
+// supabase/migrations/20260923100000_..._enum_values.sql). PRICE,
+// NO_RESPONSE, CHOSE_COMPETITOR, NOT_INTERESTED and OTHER are the
+// pre-V2 enum values reused for their matching new labels.
 export const LEAD_LOST_REASONS = [
+  "TOO_FAR",
   "PRICE",
-  "TIMING",
-  "NO_RESPONSE",
-  "CHOSE_COMPETITOR",
+  "SCHEDULE_MISMATCH",
+  "NO_CHILDCARE",
   "NOT_INTERESTED",
+  "CHOSE_COMPETITOR",
+  "NO_RESPONSE",
+  "START_LATER",
+  "SERVICE_NOT_OFFERED",
+  "NOT_A_FIT",
+  "INVALID_LEAD",
   "OTHER",
 ] as const;
 
-export type LeadLostReason = (typeof LEAD_LOST_REASONS)[number];
+// Legacy values that may still appear on historical rows but are no
+// longer offered in the UI.
+export const LEGACY_LEAD_LOST_REASONS = ["TIMING"] as const;
+
+export type LeadLostReason =
+  | (typeof LEAD_LOST_REASONS)[number]
+  | (typeof LEGACY_LEAD_LOST_REASONS)[number];
 
 export const LEAD_LOST_REASON_LABELS: Record<LeadLostReason, string> = {
-  PRICE: "המחיר לא התאים",
+  TOO_FAR: "רחוקה מדי מהסטודיו",
+  PRICE: "המחיר גבוה מדי",
+  SCHEDULE_MISMATCH: "השעות לא מתאימות",
+  NO_CHILDCARE: "אין סידור לילדים",
+  NOT_INTERESTED: "לא מעוניינת כרגע",
+  CHOSE_COMPETITOR: "בחרה סטודיו או מאמנת אחרת",
+  NO_RESPONSE: "לא ענתה לאחר ניסיונות קשר",
+  START_LATER: "רוצה להתחיל במועד מאוחר יותר",
+  SERVICE_NOT_OFFERED: "מחפשת שירות שאנחנו לא מציעים",
+  NOT_A_FIT: "לא מתאימה למסגרת האימונים",
+  INVALID_LEAD: "פרטים שגויים / ליד לא רלוונטי",
+  OTHER: "סיבה אחרת",
   TIMING: "לא הזמן המתאים",
-  NO_RESPONSE: "לא הגיבה יותר",
-  CHOSE_COMPETITOR: "בחרה מקום אחר",
-  NOT_INTERESTED: "לא הייתה מעוניינת",
+};
+
+export function isLeadLostReason(value: string | null | undefined): value is LeadLostReason {
+  return !!value && Object.prototype.hasOwnProperty.call(LEAD_LOST_REASON_LABELS, value);
+}
+
+// Conversation outcomes (lead_conversation_outcome enum, see
+// supabase/migrations/20260923101000_..._lead_workflow.sql).
+export const LEAD_CONVERSATION_OUTCOMES = [
+  "CALL_TOMORROW",
+  "CALL_BACK_LATER",
+  "WANTS_TRIAL",
+  "REQUESTED_DETAILS",
+  "NEEDS_TIME",
+  "NUTRITION_INTEREST",
+  "DETAILS_SENT_WHATSAPP",
+  "NO_ANSWER",
+  "OTHER",
+] as const;
+
+export type LeadConversationOutcome = (typeof LEAD_CONVERSATION_OUTCOMES)[number];
+
+export const LEAD_CONVERSATION_OUTCOME_LABELS: Record<LeadConversationOutcome, string> = {
+  CALL_TOMORROW: "להתקשר מחר",
+  CALL_BACK_LATER: "לחזור אליה בתאריך אחר",
+  WANTS_TRIAL: "רוצה לקבוע אימון ניסיון",
+  REQUESTED_DETAILS: "ביקשה מחירים / פרטים",
+  NEEDS_TIME: "צריכה זמן לחשוב",
+  NUTRITION_INTEREST: "מתעניינת בליווי תזונתי",
+  DETAILS_SENT_WHATSAPP: "נשלחו פרטים בוואטסאפ",
+  NO_ANSWER: "לא ענתה",
   OTHER: "אחר",
 };
+
+export function isLeadConversationOutcome(value: string | null | undefined): value is LeadConversationOutcome {
+  return !!value && (LEAD_CONVERSATION_OUTCOMES as readonly string[]).includes(value);
+}
 
 export const SERVICE_TYPES = [
   "GROUP_TRAINING",

@@ -5,8 +5,24 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FollowUpRow } from "@/components/follow-ups/follow-up-row";
 import { isSameZonedCalendarDay } from "@/lib/crm/timezone";
-import { filterActionableFollowUps } from "@/lib/crm/follow-up-visibility";
+import Link from "next/link";
+import { UserX } from "lucide-react";
+import { CreateFollowUpDialog } from "@/components/follow-ups/create-follow-up-dialog";
+import {
+  filterActionableFollowUps,
+  openLeadsWithoutFollowUp,
+  overdueActionableFollowUps,
+} from "@/lib/crm/follow-up-visibility";
+import { LEAD_STAGE_LABELS, type LeadStage } from "@/lib/crm/constants";
+import { formatRelative } from "@/lib/crm/format";
 import type { FollowUpWithRelations } from "@/lib/crm/types";
+
+type UnscheduledLead = {
+  id: string;
+  stage: LeadStage;
+  stage_changed_at: string;
+  contact: { full_name: string } | null;
+};
 
 export const metadata: Metadata = { title: "מעקבים — GAL CRM" };
 export const dynamic = "force-dynamic";
@@ -14,7 +30,7 @@ export const dynamic = "force-dynamic";
 export default async function FollowUpsPage() {
   const supabase = await createClient();
 
-  const [pendingRes, completedRes] = await Promise.all([
+  const [pendingRes, completedRes, openLeadsRes] = await Promise.all([
     supabase
       .from("follow_up_tasks")
       .select(
@@ -34,29 +50,35 @@ export default async function FollowUpsPage() {
       .eq("status", "COMPLETED")
       .order("completed_at", { ascending: false })
       .limit(20),
+    supabase
+      .from("leads")
+      .select("id, stage, stage_changed_at, contact:contacts(full_name)")
+      .not("stage", "in", "(WON,LOST)")
+      .order("stage_changed_at", { ascending: true }),
   ]);
 
   const pendingRaw = (pendingRes.data ?? []) as unknown as FollowUpWithRelations[];
   const completed = (completedRes.data ?? []) as unknown as FollowUpWithRelations[];
 
-  // Actionable-visibility rule (Automatic Lead Follow-Up Escalation
-  // Loop): a lead with an active MANUAL follow-up shows only that one
-  // here, not a second, competing AUTOMATIC row for the same lead —
-  // see lib/crm/follow-up-visibility.ts. The AUTOMATIC row itself is
-  // untouched in the database either way; it still exists, stays
-  // PENDING, and keeps driving the escalation state exactly as before.
-  const pending = filterActionableFollowUps(pendingRaw, (t) => ({
+  // Actionable-visibility rule: a lead with an active MANUAL follow-up
+  // shows only that one here, never a competing AUTOMATIC row — see
+  // lib/crm/follow-up-visibility.ts. "באיחור" uses the exact same
+  // overdueActionableFollowUps rule as the sidebar badge
+  // (app/(app)/layout.tsx), applied to the same FULL pending set.
+  const visibilityInfo = (t: FollowUpWithRelations) => ({
     source: t.source,
     status: t.status,
     leadId: t.lead?.id ?? null,
-  }));
+    dueAt: t.due_at,
+  });
+  const pending = filterActionableFollowUps(pendingRaw, visibilityInfo);
 
   const now = new Date();
   // "Today" means Israel's calendar day, not the rendering server's own
   // (Vercel serverless functions default to UTC) — see
   // lib/crm/timezone.ts's own comment for why this matters most right
   // around midnight Israel time.
-  const overdue = pending.filter((t) => new Date(t.due_at) < now);
+  const overdue = overdueActionableFollowUps(pendingRaw, visibilityInfo, now);
   const dueToday = pending.filter(
     (t) => new Date(t.due_at) >= now && isSameZonedCalendarDay(new Date(t.due_at), now)
   );
@@ -64,7 +86,16 @@ export default async function FollowUpsPage() {
     (t) => new Date(t.due_at) >= now && !isSameZonedCalendarDay(new Date(t.due_at), now)
   );
 
-  const totalOpen = pending.length;
+  // Open leads with no pending follow-up at all: nothing will ever remind
+  // Gal about them (e.g. leads already in progress whose AUTOMATIC task
+  // was closed by the V2 transition), so they get their own section with
+  // a one-click "מעקב חדש".
+  const unscheduledLeads = openLeadsWithoutFollowUp(
+    (openLeadsRes.data ?? []) as unknown as UnscheduledLead[],
+    pendingRaw.map((t) => t.lead?.id)
+  );
+
+  const totalOpen = pending.length + unscheduledLeads.length;
 
   return (
     <div>
@@ -90,6 +121,39 @@ export default async function FollowUpsPage() {
             tone="overdue"
             emptyText="שום דבר לא באיחור — הכול תחת שליטה."
           />
+          {unscheduledLeads.length > 0 && (
+            <section>
+              <div className="mb-1 flex items-center gap-2">
+                <UserX className="h-4 w-4 text-amber-500" />
+                <h2 className="text-sm font-semibold text-zinc-900">לידים פתוחים בלי מעקב</h2>
+                <span className="text-xs font-medium text-zinc-400">{unscheduledLeads.length}</span>
+              </div>
+              <p className="mb-3 text-xs text-zinc-500">
+                לידים בטיפול שאין להם מעקב מתוכנן — לא תישלח עליהם שום תזכורת עד שייקבע מעקב.
+              </p>
+              <div className="space-y-2">
+                {unscheduledLeads.map((lead) => (
+                  <div
+                    key={lead.id}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/50 px-4 py-3"
+                  >
+                    <div className="min-w-0">
+                      <Link
+                        href={`/leads/${lead.id}`}
+                        className="block truncate text-sm font-medium text-zinc-900 hover:text-rose-600 hover:underline"
+                      >
+                        {lead.contact?.full_name ?? "ליד"}
+                      </Link>
+                      <p className="mt-0.5 text-xs text-zinc-500">
+                        {LEAD_STAGE_LABELS[lead.stage]} · עודכן {formatRelative(lead.stage_changed_at)}
+                      </p>
+                    </div>
+                    <CreateFollowUpDialog leadId={lead.id} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
           <Section
             icon={CalendarDays}
             iconClass="text-amber-500"

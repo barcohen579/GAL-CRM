@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getCrmUser } from "@/lib/supabase/get-crm-user";
 import { createClient } from "@/lib/supabase/server";
 import { AppShell } from "@/components/app-shell";
-import { filterActionableFollowUps } from "@/lib/crm/follow-up-visibility";
+import { overdueActionableFollowUps } from "@/lib/crm/follow-up-visibility";
 
 // force-dynamic is explicit here rather than relying on Next.js
 // to infer it from the dynamic APIs inside getCrmUser(), since that
@@ -29,23 +29,19 @@ export default async function AppLayout({
 
   const { appUser } = result;
 
-  // Layout-wide signal for the sidebar's overdue badge. Was a plain
-  // head:true count; now fetches the (source, lead id) each row needs
-  // so the Automatic Lead Follow-Up Escalation Loop's actionable-
-  // visibility rule (lib/crm/follow-up-visibility.ts — a lead's
-  // AUTOMATIC follow-up never counts here while it also has an active
-  // MANUAL one) can be applied before counting. Still cheap at this
-  // CRM's real scale (a single studio's own lead volume, not a bulk
-  // count query justification).
+  // Sidebar overdue badge. Fetches the FULL pending set (not only the
+  // overdue rows) and applies the exact same overdueActionableFollowUps
+  // rule as the /follow-ups page "באיחור" section, so the two can never
+  // disagree (Lead Workflow V2 fix for the audit's badge/page mismatch).
   const supabase = await createClient();
-  const { data: overdueFollowUpRows } = await supabase
+  const { data: pendingRows } = await supabase
     .from("follow_up_tasks")
-    .select("id, source, lead:leads(id)")
-    .eq("status", "PENDING")
-    .lt("due_at", new Date().toISOString());
-  const overdueFollowUps = filterActionableFollowUps(
-    (overdueFollowUpRows ?? []) as unknown as { id: string; source: string; lead: { id: string } | null }[],
-    (t) => ({ source: t.source, status: "PENDING", leadId: t.lead?.id ?? null })
+    .select("id, source, due_at, lead:leads(id)")
+    .eq("status", "PENDING");
+  const overdueFollowUps = overdueActionableFollowUps(
+    (pendingRows ?? []) as unknown as { id: string; source: string; due_at: string; lead: { id: string } | null }[],
+    (t) => ({ source: t.source, status: "PENDING", leadId: t.lead?.id ?? null, dueAt: t.due_at }),
+    new Date()
   ).length;
 
   return (

@@ -166,6 +166,7 @@ export function createFakeMetaIngestionRepo(db: FakeDb): MetaIngestionRepo {
       row.touchpoint_id = ids.touchpointId;
       row.processed_at = new Date().toISOString();
       row.error_message = null;
+      (row as { created_new_lead?: boolean | null }).created_new_lead = ids.createdNewLead ?? null;
       row._updatedAtMs = Date.now();
     },
 

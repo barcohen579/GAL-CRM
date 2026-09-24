@@ -1,14 +1,13 @@
-// Pure email-content builders — no I/O, no Supabase, no provider
-// calls, so these are trivially unit-testable in isolation (same
-// "fetch/compute split" convention as lib/crm/marketing.ts). Every
-// function here takes only already-resolved, presentation-ready
-// values — a Hebrew service label, a pre-built wa.me URL — never a
-// raw enum value or a raw phone number; the caller (see
-// app/api/cron/follow-up-notifications/route.ts) resolves those via
-// lib/crm/constants.ts's SERVICE_TYPE_LABELS and
-// lib/notifications/reminder-logic.ts's buildWhatsAppUrl before ever
-// reaching this file. No financial or other unrelated CRM detail is
-// ever included — only what a Lead/Customer reminder needs.
+// Pure email-content builders for the two Lead Workflow V2 reminder
+// emails — no I/O. Every input is already presentation-ready (Hebrew
+// labels, a pre-built wa.me URL); the caller (lib/notifications/
+// reminder-job.ts) resolves those. No financial or unrelated CRM detail
+// is ever included.
+//
+//   - buildNewLeadReminderEmail:  "תזכורת לליד חדש — {name}" — the ONE
+//     reminder for a new lead's AUTOMATIC task.
+//   - buildManualFollowUpReminderEmail: "מעקב שטרם הושלם — {name}" — the
+//     ONE reminder for a MANUAL follow-up still open after its due date.
 import { formatDateTime } from "../crm/format.ts";
 
 function escapeHtml(value: string): string {
@@ -33,238 +32,17 @@ const WHATSAPP_BUTTON_STYLE =
 
 export type EmailContent = { subject: string; html: string; text: string };
 
-// ------------------------------------------------------------------
-// Individual follow-up reminders — two distinct templates, not one
-// generic one, because the two sources genuinely have different
-// content to show and must never be confused with one another:
-//
-//   - buildManualFollowUpReminderEmail: a MANUAL follow-up Gal herself
-//     created — always shown WITH her own context (title/note) when
-//     she wrote any. "One current MANUAL follow-up per Lead" (see
-//     create_manual_follow_up_for_lead in
-//     supabase/migrations/20260904170000_..._one_current_manual_follow_up_rpc.sql)
-//     guarantees the caller can only ever reach this template with the
-//     CURRENT such follow-up — a superseded older one is CANCELLED and
-//     excluded before this is ever called (isReminderEligible's own
-//     taskStatus check).
-//   - buildAutomaticFollowUpReminderEmail: the AUTOMATIC safety-net
-//     follow-up, sent only while no MANUAL one is active on the same
-//     Lead (see isAutomaticEscalationEligible). Deliberately generic,
-//     safety-net wording — there is no human-written context to show,
-//     so this template accepts no title/notes input at all and must
-//     never surface internal terms like "AUTOMATIC" or the trigger's
-//     own generic task title ("מעקב אוטומטי לליד חדש").
-//
-// Both share the same "actions" row (an optional WhatsApp button, plus
-// the CRM link, always present) — factored into the two helpers below
-// so that one row is built exactly one way in both templates.
-// ------------------------------------------------------------------
-
-function actionsHtml(whatsappUrl: string | null, recordUrl: string): string {
-  const whatsappLink = whatsappUrl
-    ? `<a href="${whatsappUrl}" style="${WHATSAPP_BUTTON_STYLE}">פתיחת WhatsApp</a>`
-    : "";
-  return `${whatsappLink}<a href="${recordUrl}" style="${BUTTON_STYLE}">פתיחת הליד ב-CRM</a>`;
-}
-
-function actionsText(whatsappUrl: string | null, recordUrl: string): string {
-  const lines: string[] = [];
-  if (whatsappUrl) lines.push(`פתיחת WhatsApp: ${whatsappUrl}`);
-  lines.push(`פתיחת הליד ב-CRM: ${recordUrl}`);
-  return lines.join("\n");
-}
-
-// "מתעניינת ב: X, Y" — omitted entirely (returns null) when there are
-// no interested services on file, per the task's own "if none exist,
-// omit the field" requirement. `labels` are already-resolved Hebrew
-// strings (SERVICE_TYPE_LABELS) — this function has no knowledge of,
-// and never sees, the underlying enum values.
-function interestedServicesLine(labels: string[]): string | null {
-  if (labels.length === 0) return null;
-  return `מתעניינת ב: ${labels.join(", ")}`;
-}
-
-export type ManualFollowUpReminderInput = {
-  /** The Lead/Customer's own contact name. */
-  leadName: string;
-  /** The MANUAL follow-up's own title. Rendered as its own line only
-   *  when it carries meaningful context beyond the lead's own name —
-   *  a title that merely equals leadName (e.g. left at whatever "מעקב
-   *  חדש" defaulted it to) is never shown as if it were extra
-   *  context; see the `showTitle` check below. */
-  title: string;
-  /** Gal's own note — rendered separately and prominently under "הערה
-   *  אחרונה:", never concatenated with the title. Omitted entirely
-   *  (both the label and the value) when there is none. */
-  notes: string | null;
-  /** Already-resolved Hebrew labels (SERVICE_TYPE_LABELS in
-   *  lib/crm/constants.ts) — a raw enum value such as GROUP_TRAINING
-   *  must never reach this function. Empty array omits the field. */
-  interestedServiceLabels: string[];
-  /** ISO timestamp — formatted here in Israel time (see
-   *  lib/crm/format.ts's own Asia/Jerusalem convention). */
-  dueAtIso: string;
-  /** Direct, already-built link to the Lead or Customer record. */
-  recordUrl: string;
-  /** Pre-built wa.me link (buildWhatsAppUrl in reminder-logic.ts), or
-   *  null when there is no usable phone on file — the WhatsApp button
-   *  is then simply omitted; the raw phone number is never included
-   *  or otherwise referenced. */
-  whatsappUrl: string | null;
+export type LatestConversation = {
+  /** Hebrew outcome label, e.g. "ביקשה מחירים / פרטים". */
+  outcomeLabel: string;
+  note: string | null;
+  atIso: string;
 };
 
-export function buildManualFollowUpReminderEmail(input: ManualFollowUpReminderInput): EmailContent {
-  const { leadName, title, notes, interestedServiceLabels, dueAtIso, recordUrl, whatsappUrl } = input;
-  const name = escapeHtml(leadName);
-  const showTitle = title.trim() !== leadName.trim();
-  const whenLabel = formatDateTime(dueAtIso);
-  const servicesLine = interestedServicesLine(interestedServiceLabels);
+type Row = { label: string; value: string };
 
-  const subject = `תזכורת למעקב – ${leadName}`;
-
-  const titleHtml = showTitle
-    ? `<p style="margin:0 0 8px; font-size:14px; color:#3f3f46;">${escapeHtml(title)}</p>`
-    : "";
-  const notesHtml = notes
-    ? `<div style="margin:0 0 12px; padding:12px; background:#fafafa; border-radius:8px; border:1px solid #e4e4e7;">
-        <p style="margin:0 0 4px; font-size:13px; font-weight:700; color:#18181b;">הערה אחרונה:</p>
-        <p style="margin:0; font-size:14px; color:#3f3f46;">${escapeHtml(notes)}</p>
-      </div>`
-    : "";
-  const servicesHtml = servicesLine
-    ? `<p style="margin:0 0 8px; font-size:13px; color:#71717a;">${escapeHtml(servicesLine)}</p>`
-    : "";
-
-  const html = `
-    <div dir="rtl" lang="he" style="${EMAIL_WRAPPER_STYLE}">
-      <div style="${CARD_STYLE}">
-        <h1 style="margin:0 0 12px; font-size:18px; color:#18181b;">תזכורת למעקב – ${name}</h1>
-        <p style="margin:0 0 8px; font-size:14px; color:#3f3f46;">הגיע הזמן לחזור אל ${name}.</p>
-        ${titleHtml}
-        ${notesHtml}
-        ${servicesHtml}
-        <p style="margin:0 0 8px; font-size:13px; color:#71717a;">מועד המעקב: ${escapeHtml(whenLabel)}</p>
-        ${actionsHtml(whatsappUrl, recordUrl)}
-      </div>
-    </div>
-  `.trim();
-
-  const textLines: string[] = [subject, "", `הגיע הזמן לחזור אל ${leadName}.`];
-  if (showTitle) textLines.push("", title);
-  if (notes) textLines.push("", "הערה אחרונה:", notes);
-  if (servicesLine) textLines.push("", servicesLine);
-  textLines.push("", `מועד המעקב: ${whenLabel}`);
-  textLines.push("", actionsText(whatsappUrl, recordUrl));
-
-  return { subject, html, text: textLines.join("\n") };
-}
-
-export type AutomaticFollowUpReminderInput = {
-  /** The Lead's own contact name. */
-  leadName: string;
-  /** Already-resolved Hebrew labels — see ManualFollowUpReminderInput. */
-  interestedServiceLabels: string[];
-  recordUrl: string;
-  /** See ManualFollowUpReminderInput — same contract. */
-  whatsappUrl: string | null;
-};
-
-export function buildAutomaticFollowUpReminderEmail(input: AutomaticFollowUpReminderInput): EmailContent {
-  const { leadName, interestedServiceLabels, recordUrl, whatsappUrl } = input;
-  const name = escapeHtml(leadName);
-  const servicesLine = interestedServicesLine(interestedServiceLabels);
-  const servicesHtml = servicesLine
-    ? `<p style="margin:0 0 8px; font-size:13px; color:#71717a;">${escapeHtml(servicesLine)}</p>`
-    : "";
-
-  const subject = `תזכורת לליד פתוח – ${leadName}`;
-
-  const html = `
-    <div dir="rtl" lang="he" style="${EMAIL_WRAPPER_STYLE}">
-      <div style="${CARD_STYLE}">
-        <h1 style="margin:0 0 12px; font-size:18px; color:#18181b;">תזכורת לליד פתוח – ${name}</h1>
-        <p style="margin:0 0 8px; font-size:14px; color:#3f3f46;">${name} עדיין פתוחה ואין כרגע מעקב ידני פעיל.</p>
-        <p style="margin:0 0 8px; font-size:14px; color:#3f3f46;">זה הזמן לבדוק אם צריך לחזור אליה.</p>
-        ${servicesHtml}
-        ${actionsHtml(whatsappUrl, recordUrl)}
-      </div>
-    </div>
-  `.trim();
-
-  const textLines: string[] = [
-    subject,
-    "",
-    `${leadName} עדיין פתוחה ואין כרגע מעקב ידני פעיל.`,
-    "",
-    "זה הזמן לבדוק אם צריך לחזור אליה.",
-  ];
-  if (servicesLine) textLines.push("", servicesLine);
-  textLines.push("", actionsText(whatsappUrl, recordUrl));
-
-  return { subject, html, text: textLines.join("\n") };
-}
-
-// ------------------------------------------------------------------
-// Immediate new-lead notification — fired once, synchronously, by
-// app/api/zapier/facebook-leads/route.ts and
-// app/api/meta/leadgen-webhook/route.ts right after a genuinely NEW
-// Meta lead is durably persisted (see
-// lib/notifications/new-lead-notification.ts). Deliberately a THIRD,
-// distinct template from the two follow-up reminder ones above: this is
-// "a new lead just arrived", not "it's time to follow up again" — it
-// must never be confused with, and never replaces, the next-day
-// AUTOMATIC escalation email (buildAutomaticFollowUpReminderEmail).
-//
-// Unlike the follow-up templates, this one DOES include the raw phone
-// number directly in the body (per product requirement — Gal needs to
-// act on a brand-new lead immediately) rather than only a wa.me link;
-// the WhatsApp button is still included alongside it for convenience.
-// ------------------------------------------------------------------
-
-export type NewLeadNotificationInput = {
-  fullName: string;
-  phone: string | null;
-  email: string | null;
-  /** Human-readable source label, e.g. "Meta / Facebook Lead Ads". */
-  source: string;
-  /** ISO timestamp the lead was received — formatted here in Israel
-   *  time, same convention as every other email in this file. */
-  receivedAtIso: string;
-  campaignName: string | null;
-  formName: string | null;
-  adName: string | null;
-  recordUrl: string;
-  whatsappUrl: string | null;
-};
-
-function attributionLines(input: NewLeadNotificationInput): string[] {
-  const lines: string[] = [];
-  if (input.campaignName) lines.push(`קמפיין: ${input.campaignName}`);
-  if (input.formName) lines.push(`טופס: ${input.formName}`);
-  if (input.adName) lines.push(`מודעה: ${input.adName}`);
-  return lines;
-}
-
-export function buildNewLeadNotificationEmail(input: NewLeadNotificationInput): EmailContent {
-  const name = escapeHtml(input.fullName);
-  const receivedLabel = formatDateTime(input.receivedAtIso);
-  const attribution = attributionLines(input);
-
-  const subject = `ליד חדש נכנס מ-Meta — ${input.fullName}`;
-
-  const detailRows: { label: string; value: string }[] = [
-    { label: "שם מלא", value: input.fullName },
-    ...(input.phone ? [{ label: "טלפון", value: input.phone }] : []),
-    ...(input.email ? [{ label: "אימייל", value: input.email }] : []),
-    { label: "מקור", value: input.source },
-    { label: "התקבל", value: receivedLabel },
-    ...attribution.map((line) => {
-      const [label, ...rest] = line.split(": ");
-      return { label, value: rest.join(": ") };
-    }),
-  ];
-
-  const rowsHtml = detailRows
+function rowsHtml(rows: Row[]): string {
+  return rows
     .map(
       (row) => `
         <p style="margin:0 0 6px; font-size:14px; color:#3f3f46;">
@@ -272,75 +50,139 @@ export function buildNewLeadNotificationEmail(input: NewLeadNotificationInput): 
         </p>`
     )
     .join("");
-
-  const html = `
-    <div dir="rtl" lang="he" style="${EMAIL_WRAPPER_STYLE}">
-      <div style="${CARD_STYLE}">
-        <h1 style="margin:0 0 12px; font-size:18px; color:#18181b;">ליד חדש נכנס מ-Meta</h1>
-        <p style="margin:0 0 12px; font-size:14px; color:#3f3f46;">${name} השאיר/ה פרטים עכשיו.</p>
-        ${rowsHtml}
-        ${actionsHtml(input.whatsappUrl, input.recordUrl)}
-      </div>
-    </div>
-  `.trim();
-
-  const textLines: string[] = [
-    subject,
-    "",
-    `${input.fullName} השאיר/ה פרטים עכשיו.`,
-    "",
-    ...detailRows.map((row) => `${row.label}: ${row.value}`),
-    "",
-    actionsText(input.whatsappUrl, input.recordUrl),
-  ];
-
-  return { subject, html, text: textLines.join("\n") };
 }
 
-// ------------------------------------------------------------------
-// Daily digest
-// ------------------------------------------------------------------
+function conversationRows(latest: LatestConversation | null): Row[] {
+  if (!latest) return [];
+  const rows: Row[] = [
+    { label: "שיחה אחרונה", value: `${latest.outcomeLabel} (${formatDateTime(latest.atIso)})` },
+  ];
+  if (latest.note) rows.push({ label: "הערה מהשיחה", value: latest.note });
+  return rows;
+}
 
-export type DigestItem = {
-  /** Pre-formatted Israel-time "HH:mm", e.g. "10:00". */
-  time: string;
-  contactName: string;
-  reason: string;
+function actionsHtml(whatsappUrl: string | null, recordUrl: string, recordLabel: string): string {
+  const whatsappLink = whatsappUrl
+    ? `<a href="${escapeHtml(whatsappUrl)}" style="${WHATSAPP_BUTTON_STYLE}">פתיחת WhatsApp</a>`
+    : "";
+  return `${whatsappLink}<a href="${escapeHtml(recordUrl)}" style="${BUTTON_STYLE}">${escapeHtml(recordLabel)}</a>`;
+}
+
+function actionsText(whatsappUrl: string | null, recordUrl: string, recordLabel: string): string {
+  const lines: string[] = [];
+  if (whatsappUrl) lines.push(`פתיחת WhatsApp: ${whatsappUrl}`);
+  lines.push(`${recordLabel}: ${recordUrl}`);
+  return lines.join("\n");
+}
+
+function render(params: {
+  subject: string;
+  heading: string;
+  intro: string;
+  rows: Row[];
+  whatsappUrl: string | null;
   recordUrl: string;
-};
-
-export function buildDailyDigestEmail(items: DigestItem[], dateLabel: string): EmailContent {
-  const count = items.length;
-  const subject = `המעקבים שלך להיום — ${count}`;
-
-  const rowsHtml = items
-    .map(
-      (item) => `
-        <li style="margin:0 0 10px; font-size:14px; color:#3f3f46;">
-          <a href="${item.recordUrl}" style="color:#e11d48; text-decoration:none; font-weight:600;">
-            ${escapeHtml(item.time)} — ${escapeHtml(item.contactName)}
-          </a>
-          <span style="color:#71717a;"> — ${escapeHtml(item.reason)}</span>
-        </li>
-      `
-    )
-    .join("");
-
+  recordLabel: string;
+}): EmailContent {
+  const { subject, heading, intro, rows, whatsappUrl, recordUrl, recordLabel } = params;
   const html = `
     <div dir="rtl" lang="he" style="${EMAIL_WRAPPER_STYLE}">
       <div style="${CARD_STYLE}">
-        <h1 style="margin:0 0 4px; font-size:18px; color:#18181b;">המעקבים שלך להיום — ${count}</h1>
-        <p style="margin:0 0 16px; font-size:13px; color:#71717a;">${escapeHtml(dateLabel)}</p>
-        <ul style="margin:0; padding-inline-start:20px;">
-          ${rowsHtml}
-        </ul>
+        <h1 style="margin:0 0 12px; font-size:18px; color:#18181b;">${escapeHtml(heading)}</h1>
+        <p style="margin:0 0 12px; font-size:14px; color:#3f3f46;">${escapeHtml(intro)}</p>
+        ${rowsHtml(rows)}
+        ${actionsHtml(whatsappUrl, recordUrl, recordLabel)}
       </div>
     </div>
   `.trim();
 
-  const text =
-    `המעקבים שלך להיום — ${count}\n${dateLabel}\n\n` +
-    items.map((item) => `${item.time} — ${item.contactName} — ${item.reason}\n${item.recordUrl}`).join("\n\n");
+  const text = [
+    subject,
+    "",
+    intro,
+    "",
+    ...rows.map((row) => `${row.label}: ${row.value}`),
+    "",
+    actionsText(whatsappUrl, recordUrl, recordLabel),
+  ].join("\n");
 
   return { subject, html, text };
+}
+
+export type NewLeadReminderInput = {
+  leadName: string;
+  phone: string | null;
+  /** Hebrew stage label (LEAD_STAGE_LABELS). */
+  stageLabel: string;
+  /** Hebrew service labels (SERVICE_TYPE_LABELS); empty omits the row. */
+  interestedServiceLabels: string[];
+  /** Hebrew primary-source label, or null when unknown. */
+  sourceLabel: string | null;
+  leadCreatedAtIso: string;
+  latestConversation: LatestConversation | null;
+  recordUrl: string;
+  /** Pre-built wa.me link, or null when there is no valid phone. */
+  whatsappUrl: string | null;
+};
+
+export function buildNewLeadReminderEmail(input: NewLeadReminderInput): EmailContent {
+  const rows: Row[] = [{ label: "שם", value: input.leadName }];
+  if (input.phone) rows.push({ label: "טלפון", value: input.phone });
+  rows.push({ label: "שלב", value: input.stageLabel });
+  if (input.interestedServiceLabels.length > 0) {
+    rows.push({ label: "מתעניינת ב", value: input.interestedServiceLabels.join(", ") });
+  }
+  if (input.sourceLabel) rows.push({ label: "מקור", value: input.sourceLabel });
+  rows.push({ label: "נכנס ל-CRM", value: formatDateTime(input.leadCreatedAtIso) });
+  rows.push(...conversationRows(input.latestConversation));
+
+  return render({
+    subject: `תזכורת לליד חדש — ${input.leadName}`,
+    heading: `תזכורת לליד חדש — ${input.leadName}`,
+    intro: "ליד חדש שעדיין לא נוצר איתו קשר. זו התזכורת היחידה שתישלח על הליד הזה.",
+    rows,
+    whatsappUrl: input.whatsappUrl,
+    recordUrl: input.recordUrl,
+    recordLabel: "פתיחת הליד ב-CRM",
+  });
+}
+
+export type ManualFollowUpReminderInput = {
+  /** Lead or customer contact name. */
+  name: string;
+  phone: string | null;
+  /** Hebrew lead stage label, or null for a customer follow-up. */
+  stageLabel: string | null;
+  isCustomer: boolean;
+  interestedServiceLabels: string[];
+  /** What Gal wrote she needs to do. */
+  title: string;
+  notes: string | null;
+  dueAtIso: string;
+  latestConversation: LatestConversation | null;
+  recordUrl: string;
+  whatsappUrl: string | null;
+};
+
+export function buildManualFollowUpReminderEmail(input: ManualFollowUpReminderInput): EmailContent {
+  const rows: Row[] = [{ label: "שם", value: input.name }];
+  if (input.phone) rows.push({ label: "טלפון", value: input.phone });
+  rows.push({ label: "מה צריך לעשות", value: input.title });
+  if (input.notes) rows.push({ label: "הערה", value: input.notes });
+  rows.push({ label: "מועד המעקב", value: formatDateTime(input.dueAtIso) });
+  rows.push({ label: "שלב", value: input.stageLabel ?? "לקוחה" });
+  if (input.interestedServiceLabels.length > 0) {
+    rows.push({ label: "מתעניינת ב", value: input.interestedServiceLabels.join(", ") });
+  }
+  rows.push(...conversationRows(input.latestConversation));
+
+  return render({
+    subject: `מעקב שטרם הושלם — ${input.name}`,
+    heading: `מעקב שטרם הושלם — ${input.name}`,
+    intro: "המעקב הזה עדיין פתוח ב-CRM. זו התזכורת היחידה שתישלח עליו.",
+    rows,
+    whatsappUrl: input.whatsappUrl,
+    recordUrl: input.recordUrl,
+    recordLabel: input.isCustomer ? "פתיחת הלקוחה ב-CRM" : "פתיחת הליד ב-CRM",
+  });
 }

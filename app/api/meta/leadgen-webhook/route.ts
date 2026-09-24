@@ -36,89 +36,10 @@ import { parseLeadgenWebhookEntries } from "../../../../lib/meta/webhook-payload
 import { createSupabaseMetaIngestionRepo } from "../../../../lib/meta/repo.ts";
 import { processOneLeadgenId } from "../../../../lib/meta/ingest.ts";
 import { makePageAccessTokenDeriver, fetchLeadByLeadgenId } from "../../../../lib/meta/graph.ts";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { getEmailProvider } from "../../../../lib/notifications/get-email-provider.ts";
-import { getAppBaseUrl, getGalNotificationEmail } from "../../../../lib/notifications/env.ts";
-import { buildWhatsAppUrl } from "../../../../lib/notifications/reminder-logic.ts";
-import {
-  shouldSendNewLeadNotification,
-  sendNewLeadNotification,
-} from "../../../../lib/notifications/new-lead-notification.ts";
-import type { ProcessOutcome } from "../../../../lib/meta/ingest.ts";
-import type { LeadgenWebhookEntry } from "../../../../lib/meta/webhook-payload.ts";
 
 // node:crypto (used by webhook-signature.ts) requires the Node runtime,
 // not the Edge runtime.
 export const runtime = "nodejs";
-
-// Immediate new-lead email for the direct-webhook path — mirrors
-// app/api/zapier/facebook-leads/route.ts's own inline version, adapted
-// for this path's own shape: unlike Zapier (which already hands over
-// resolved fullName/phone/email in the POST body), this route only
-// gets ids back from processOneLeadgenId (see lib/meta/ingest.ts's
-// ProcessOutcome — the resolved field_data was fetched deep inside
-// that function via the Graph API and deliberately isn't threaded back
-// out through it, to keep that pure ingestion pipeline free of
-// notification concerns). One extra read of the just-created/matched
-// contact row is the simplest way to get the display fields this email
-// needs without changing ingest.ts's return shape. Never throws — any
-// failure here is logged and swallowed; the already-persisted lead is
-// unaffected. Entirely separate from, and does not replace, the
-// next-day AUTOMATIC follow-up escalation.
-async function notifyNewLead(
-  supabase: SupabaseClient,
-  outcome: Extract<ProcessOutcome, { outcome: "processed" }>,
-  entry: LeadgenWebhookEntry,
-  receivedAt: string
-): Promise<void> {
-  try {
-    const appBaseUrl = getAppBaseUrl();
-    const recipient = getGalNotificationEmail();
-
-    const { data: contact, error } = await supabase
-      .from("contacts")
-      .select("full_name, phone, email")
-      .eq("id", outcome.contactId)
-      .maybeSingle();
-    if (error || !contact) {
-      throw new Error(`Could not load contact for new-lead notification: ${error?.message ?? "not found"}`);
-    }
-
-    await sendNewLeadNotification({
-      provider: getEmailProvider(),
-      recipient,
-      lead: {
-        fullName: contact.full_name as string,
-        phone: (contact.phone as string | null) ?? null,
-        email: (contact.email as string | null) ?? null,
-        source: "Meta / Facebook Lead Ads",
-        receivedAtIso: entry.createdTimeIso ?? receivedAt,
-        campaignName: entry.campaignId, // direct webhook exposes only ids, no names
-        formName: entry.formId,
-        adName: entry.adId,
-        recordUrl: `${appBaseUrl}/leads/${outcome.leadId}`,
-        whatsappUrl: buildWhatsAppUrl((contact.phone as string | null) ?? null),
-      },
-      recordNotification: async (result) => {
-        // Always the row's FIRST notification attempt (fresh rows start
-        // notification_attempt_count at 0) — no concurrency risk here,
-        // unlike processNewLeadNotificationRetries' own CAS-based retry
-        // claim (app/api/cron/follow-up-notifications).
-        await supabase
-          .from("meta_lead_ingestions")
-          .update(
-            result.status === "SENT"
-              ? { notification_sent_at: result.sentAt, notification_error: null, notification_attempt_count: 1 }
-              : { notification_error: result.error, notification_attempt_count: 1 }
-          )
-          .eq("id", outcome.ingestionId);
-      },
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Notification config missing";
-    console.error(JSON.stringify({ step: "meta_webhook_new_lead_notification_config_error", message }));
-  }
-}
 
 export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
@@ -206,13 +127,8 @@ export async function POST(request: Request): Promise<Response> {
     // Only ids and outcome labels — never field_data/phone/email.
     results.push({ leadgenId: entry.leadgenId, outcome: outcome.outcome });
 
-    // Immediate new-lead email — at most once, only for a genuinely
-    // first-time-processed lead (see shouldSendNewLeadNotification).
-    // Entirely separate from, and does not replace, the next-day
-    // AUTOMATIC follow-up escalation.
-    if (shouldSendNewLeadNotification(outcome)) {
-      await notifyNewLead(supabase, outcome, entry, receivedAt);
-    }
+    // Lead Workflow V2: no immediate email — every NEW lead gets its one
+    // reminder from the AUTOMATIC task (app/api/cron/follow-up-notifications).
   }
 
   console.log(JSON.stringify({ step: "leadgen_webhook_processed", results }));

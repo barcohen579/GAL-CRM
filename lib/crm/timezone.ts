@@ -194,3 +194,24 @@ export function automaticFollowUpDueAtIso(
   const dueDateKey = nextEligibleFollowUpDay(createdAtDateKey);
   return zonedWallTimeToUtcIso(dueDateKey, "10:00", timeZone);
 }
+
+/** When a follow-up's ONE reminder email becomes eligible (Lead Workflow
+ *  V2) — pure TS mirror of the SQL follow_up_reminder_at() (see
+ *  supabase/migrations/20260923101000_..._lead_workflow.sql), which is
+ *  the authoritative value stored in follow_up_reminder_deliveries.
+ *  remind_at. Kept here as the fast, DB-free test surface for the rule:
+ *   - AUTOMATIC (new-lead) task: its own due_at, which is already 10:00
+ *     Israel on the next Sun-Thu after the lead was created.
+ *   - MANUAL (or any other) task: 10:00 Israel time on the next Sun-Thu
+ *     STRICTLY AFTER the task's own Israel due DATE — i.e. only once the
+ *     task is genuinely overdue. Due Tuesday (any hour) -> Wednesday
+ *     10:00; due Thursday/Friday/Saturday -> Sunday 10:00. */
+export function followUpReminderAtIso(
+  source: string,
+  dueAtIso: string,
+  timeZone: string = ISRAEL_TIME_ZONE
+): string {
+  if (source === "AUTOMATIC") return new Date(dueAtIso).toISOString();
+  const dueDateKey = zonedParts(new Date(dueAtIso), timeZone).dateKey;
+  return zonedWallTimeToUtcIso(nextEligibleFollowUpDay(dueDateKey), "10:00", timeZone);
+}

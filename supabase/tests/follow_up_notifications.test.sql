@@ -76,8 +76,8 @@ begin
   -- more than one delivery row.
   -----------------------------------------------------------------
   begin
-    insert into public.follow_up_reminder_deliveries (follow_up_task_id, status)
-      values (v_task, 'PENDING');
+    insert into public.follow_up_reminder_deliveries (follow_up_task_id, status, remind_at)
+      values (v_task, 'PENDING', now());
     raise exception 'ASSERTION FAILED (Scenario 2): the unique constraint did not block a second delivery row for the same task';
   exception when unique_violation then
     null; -- expected
@@ -247,17 +247,17 @@ begin
   end if;
 
   -----------------------------------------------------------------
-  -- Scenario 11: completing/cancelling a follow-up never touches its
-  -- delivery row's own status (the cron's join-based filter on the
-  -- LIVE task status is what actually prevents sending it, per this
-  -- migration's own documented design choice) — confirms that
-  -- documented behavior stays true.
+  -- Scenario 11: completing a follow-up before its reminder is sent
+  -- marks its unsent delivery row SKIPPED (V2 sync_reminder_delivery
+  -- trigger, 20260923101000) — an explicit terminal state instead of
+  -- the pre-V2 PENDING-forever row that caused claim starvation.
   -----------------------------------------------------------------
   declare
     v_contact2 uuid;
     v_lead2 uuid;
     v_task2 uuid;
     v_delivery2_status public.follow_up_reminder_status;
+    v_delivery2_reason text;
   begin
     -- A fresh lead, not v_lead: v_lead's own Day-0 AUTOMATIC row plus
     -- v_task (still PENDING, source MANUAL by default, from Scenario 1
@@ -276,9 +276,10 @@ begin
 
     update public.follow_up_tasks set status = 'COMPLETED', completed_at = now() where id = v_task2;
 
-    select status into v_delivery2_status from public.follow_up_reminder_deliveries where follow_up_task_id = v_task2;
-    if v_delivery2_status <> 'PENDING' then
-      raise exception 'ASSERTION FAILED (Scenario 11): completing a task unexpectedly changed its delivery row''s own status (documented as NOT happening — the join filter is what matters)';
+    select status, skipped_reason into v_delivery2_status, v_delivery2_reason
+    from public.follow_up_reminder_deliveries where follow_up_task_id = v_task2;
+    if v_delivery2_status is distinct from 'SKIPPED' or v_delivery2_reason is distinct from 'task completed before reminder' then
+      raise exception 'ASSERTION FAILED (Scenario 11): completing a task left its unsent delivery as % (%), expected SKIPPED (task completed before reminder)', v_delivery2_status, v_delivery2_reason;
     end if;
   end;
 
